@@ -1,0 +1,54 @@
+# ICE production deployment
+
+This directory records the production runtime convention for the single
+Sub2API account-pool instance on `ice-do-db`.
+
+## Runtime layout
+
+```text
+/home/iec/sub2api/                         source checkout (`ice` branch)
+/home/iec/deploy/bin/sub2api               active binary symlink
+/home/iec/deploy/bin/sub2api.<version>     immutable versioned binaries
+/home/iec/deploy/etc/sub2api.yaml          live configuration (0600; never commit)
+/home/iec/deploy/sub2api/                  setup lock and local application data
+/home/iec/deploy/log/sub2api.log           application log
+/home/iec/deploy/log/sub2api-systemd.log   early startup/systemd output
+```
+
+The application uses the existing PostgreSQL server through a dedicated
+`sub2api` role/database and a dedicated localhost Redis instance managed as
+`redis-server@sub2api.service`. Database and Redis credentials stay only in
+the live mode-0600 configuration.
+
+## Network boundary
+
+- Application listener: the `ice-do-db` DO VPC address on port `8320`.
+- API origins reach it only through the DO VPC.
+- The management hostname terminates TLS at the live `ice-do-db` Nginx.
+- Port `8320` must not be opened to the public Internet.
+
+## Source build
+
+Always build the embedded frontend before the Go binary:
+
+```bash
+corepack enable
+corepack prepare pnpm@9 --activate
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend run lint:check
+pnpm --dir frontend run typecheck
+pnpm --dir frontend run build
+
+cd backend
+GOTOOLCHAIN=auto go test ./...
+CGO_ENABLED=0 GOTOOLCHAIN=auto go build -tags embed -trimpath ./cmd/server
+```
+
+Production artifacts must come from a clean, pushed `ice` commit. Install the
+binary as `sub2api.<timestamp>-<short-commit>`, atomically flip the `sub2api`
+symlink, restart the unit, verify `/health` and the systemd MainPID executable,
+and append the result to the shared release ledger. Keep at least five previous
+binaries for rollback.
+
+Database migrations are forward-only. Back up the `sub2api` database before
+every upgrade that contains migrations.

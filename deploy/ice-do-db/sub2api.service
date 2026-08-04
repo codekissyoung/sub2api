@@ -1,0 +1,42 @@
+[Unit]
+Description=Sub2API Account Pool
+Documentation=https://github.com/Wei-Shaw/sub2api
+After=network-online.target postgresql.service redis-server@sub2api.service
+Wants=network-online.target postgresql.service redis-server@sub2api.service
+
+[Service]
+Type=simple
+User=iec
+Group=iec
+WorkingDirectory=/home/iec/deploy
+
+Environment=CONFIG_FILE=/home/iec/deploy/etc/sub2api.yaml
+Environment=DATA_DIR=/home/iec/deploy/sub2api
+
+ExecStartPre=/usr/bin/test -x /home/iec/deploy/bin/sub2api
+ExecStartPre=/usr/bin/test -r /home/iec/deploy/etc/sub2api.yaml
+ExecStart=/home/iec/deploy/bin/sub2api
+
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+KillMode=mixed
+KillSignal=SIGTERM
+
+StandardOutput=append:/home/iec/deploy/log/sub2api-systemd.log
+StandardError=append:/home/iec/deploy/log/sub2api-systemd.log
+
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+LimitNOFILE=131072
+MemoryHigh=2G
+MemoryMax=3G
+
+[Install]
+WantedBy=multi-user.target
