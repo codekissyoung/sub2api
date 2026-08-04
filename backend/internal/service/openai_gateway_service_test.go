@@ -368,6 +368,7 @@ func TestOpenAIGatewayService_ClientSessionHeaderPriority(t *testing.T) {
 	}{
 		{name: "session_id", value: "generic-session"},
 		{name: "conversation_id", value: "generic-conversation"},
+		{name: codexSessionIDHeader, value: "codex-session-id"},
 		{name: openCodeSessionAffinityHeader, value: "opencode-affinity"},
 		{name: openCodeSessionIDHeader, value: "opencode-session-id"},
 		{name: openCodeNativeSessionHeader, value: "opencode-native-session"},

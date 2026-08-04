@@ -81,6 +81,7 @@ func TestExtractClientSessionID_SupportedHeaders(t *testing.T) {
 	}{
 		{"session_id", "session_id", "sess-A"},
 		{"conversation_id", "conversation_id", "conv-B"},
+		{"Session-Id", codexSessionIDHeader, "codex-C"},
 		{"X-Session-Affinity", openCodeSessionAffinityHeader, "aff-C"},
 		{"X-Session-Id", openCodeSessionIDHeader, "sid-D"},
 		{"X-OpenCode-Session", openCodeNativeSessionHeader, "oc-E"},
