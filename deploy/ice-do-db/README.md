@@ -13,6 +13,7 @@ Sub2API account-pool instance on `ice-do-db`.
 /home/iec/deploy/sub2api/                  setup lock and local application data
 /home/iec/deploy/log/sub2api.log           application log
 /home/iec/deploy/log/sub2api-systemd.log   early startup/systemd output
+/home/iec/deploy/bin/backup-sub2api-pg-to-oss  PostgreSQL OSS backup job
 ```
 
 The application uses the existing PostgreSQL server through a dedicated
@@ -51,4 +52,11 @@ and append the result to the shared release ledger. Keep at least five previous
 binaries for rollback.
 
 Database migrations are forward-only. Back up the `sub2api` database before
-every upgrade that contains migrations.
+every upgrade that contains migrations. Production also runs
+`backup-sub2api-pg-to-oss.sh` four times per day under `flock`; it uses local
+PostgreSQL peer authentication, writes no database password, verifies uploaded
+object sizes, and retains seven days of database archives.
+
+The reviewed Nginx vhost is `sub2api.nginx.conf`. It uses the existing
+`*.ieasycode.cc` Cloudflare Origin CA certificate and proxies only to the VPC
+listener; keep Cloudflare proxying enabled for the public management hostname.
