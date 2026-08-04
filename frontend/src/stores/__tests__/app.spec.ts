@@ -189,13 +189,13 @@ describe('useAppStore', () => {
   describe('侧边栏管理', () => {
     it('toggleSidebar 切换折叠状态', () => {
       const store = useAppStore()
-      expect(store.sidebarCollapsed).toBe(false)
-
-      store.toggleSidebar()
       expect(store.sidebarCollapsed).toBe(true)
 
       store.toggleSidebar()
       expect(store.sidebarCollapsed).toBe(false)
+
+      store.toggleSidebar()
+      expect(store.sidebarCollapsed).toBe(true)
     })
 
     it('setSidebarCollapsed 直接设置状态', () => {
@@ -315,7 +315,7 @@ describe('useAppStore', () => {
 
       store.reset()
 
-      expect(store.sidebarCollapsed).toBe(false)
+      expect(store.sidebarCollapsed).toBe(true)
       expect(store.loading).toBe(false)
       expect(store.toasts).toHaveLength(0)
     })

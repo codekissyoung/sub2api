@@ -17,7 +17,9 @@ import { getPublicSettings as fetchPublicSettingsAPI } from '@/api/auth'
 export const useAppStore = defineStore('app', () => {
   // ==================== State ====================
 
-  const sidebarCollapsed = ref<boolean>(false)
+  // Keep the desktop navigation compact by default; users can expand it with
+  // the sidebar toggle when they need the labels.
+  const sidebarCollapsed = ref<boolean>(true)
   const mobileOpen = ref<boolean>(false)
   const sidebarScrollTop = ref<number>(0)
   const loading = ref<boolean>(false)
@@ -228,7 +230,7 @@ export const useAppStore = defineStore('app', () => {
    * Useful for cleanup or testing
    */
   function reset(): void {
-    sidebarCollapsed.value = false
+    sidebarCollapsed.value = true
     loading.value = false
     loadingCount.value = 0
     toasts.value = []
