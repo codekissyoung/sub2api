@@ -322,6 +322,13 @@ func TestShouldFailoverOpenAIUpstreamResponseContextWindow502(t *testing.T) {
 	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "temporary upstream outage", []byte(`{"error":{"message":"temporary upstream outage"}}`)))
 }
 
+func TestShouldFailoverOpenAIUpstreamResponseRequestTimeout(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"detail":"Request body read timed out"}`)
+
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusRequestTimeout, "Request body read timed out", body))
+}
+
 func TestOpenAIGatewayService_Forward_LogsInstructionsRequiredDetails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureStructuredLog(t)
