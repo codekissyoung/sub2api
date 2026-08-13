@@ -136,6 +136,36 @@ describe('useAppStore', () => {
       expect(store.toasts).toHaveLength(0)
     })
 
+    it('showError 默认常驻不自动消失（便于阅读与复制报错）', () => {
+      const store = useAppStore()
+      store.showError('出错了')
+
+      vi.advanceTimersByTime(60_000)
+
+      expect(store.toasts).toHaveLength(1)
+      expect(store.toasts[0].type).toBe('error')
+    })
+
+    it('showError 显式传 duration 时仍自动消失', () => {
+      const store = useAppStore()
+      store.showError('出错了', 3000)
+
+      vi.advanceTimersByTime(3000)
+
+      expect(store.toasts).toHaveLength(0)
+    })
+
+    it('toast 数量超上限时丢弃最旧的', () => {
+      const store = useAppStore()
+      for (let i = 1; i <= 6; i++) {
+        store.showInfo(`消息${i}`)
+      }
+
+      expect(store.toasts).toHaveLength(5)
+      expect(store.toasts[0].message).toBe('消息2')
+      expect(store.toasts[4].message).toBe('消息6')
+    })
+
     it('hideToast 移除指定 toast', () => {
       const store = useAppStore()
       const id = store.showSuccess('消息1')

@@ -42,7 +42,7 @@
                 </p>
                 <p
                   :class="[
-                    'text-sm leading-relaxed',
+                    'select-text break-words text-sm leading-relaxed',
                     toast.title
                       ? 'mt-1 text-gray-600 dark:text-gray-300'
                       : 'text-gray-900 dark:text-white'
@@ -51,6 +51,16 @@
                   {{ toast.message }}
                 </p>
               </div>
+
+              <!-- Copy button（错误 toast：便于复制完整报错） -->
+              <button
+                v-if="toast.type === 'error'"
+                @click="copyToastMessage(toast.message)"
+                class="-m-1 flex-shrink-0 rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600 dark:text-gray-500 dark:hover:bg-dark-700 dark:hover:text-gray-300"
+                :aria-label="t('common.copy')"
+              >
+                <Icon name="copy" size="sm" />
+              </button>
 
               <!-- Close button -->
               <button
@@ -78,12 +88,20 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
+import { useClipboard } from '@/composables/useClipboard'
 
 const appStore = useAppStore()
+const { t } = useI18n()
+const { copyToClipboard } = useClipboard()
 
 const toasts = computed(() => appStore.toasts)
+
+const copyToastMessage = (message: string) => {
+  copyToClipboard(message)
+}
 
 const getToastIconName = (type: string): 'checkCircle' | 'xCircle' | 'exclamationTriangle' | 'infoCircle' => {
   switch (type) {

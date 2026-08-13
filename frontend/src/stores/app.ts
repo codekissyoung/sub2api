@@ -101,6 +101,9 @@ export const useAppStore = defineStore('app', () => {
     loading.value = loadingCount.value > 0
   }
 
+  // 常驻 toast（如报错）可能堆积：限制同屏数量，超出时丢弃最旧的
+  const MAX_TOASTS = 5
+
   /**
    * Show a toast notification
    * @param type - Type of toast (success, error, info, warning)
@@ -109,6 +112,9 @@ export const useAppStore = defineStore('app', () => {
    * @returns Toast ID for manual dismissal
    */
   function showToast(type: ToastType, message: string, duration?: number): string {
+    if (toasts.value.length >= MAX_TOASTS) {
+      toasts.value.splice(0, toasts.value.length - MAX_TOASTS + 1)
+    }
     const id = `toast-${++toastIdCounter}`
     const toast: Toast = {
       id,
@@ -141,10 +147,11 @@ export const useAppStore = defineStore('app', () => {
 
   /**
    * Show an error toast
+   * 报错默认常驻、不自动消失，便于用户阅读与复制完整错误内容；显式传 duration 可恢复自动消失
    * @param message - Error message
-   * @param duration - Auto-dismiss duration in ms (default: 5000)
+   * @param duration - Auto-dismiss duration in ms (default: undefined = sticky until closed manually)
    */
-  function showError(message: string, duration: number = 5000): string {
+  function showError(message: string, duration?: number): string {
     return showToast('error', message, duration)
   }
 
