@@ -902,6 +902,24 @@ export async function refreshOllamaCloudUsage(id: number): Promise<OllamaCloudUs
   return data
 }
 
+export interface OpenAIPoolEstimate {
+  total_usd: number
+  account_count: number
+  missing_data_count: number
+  newest_usage_updated_at: string | null
+  oldest_usage_updated_at: string | null
+}
+
+/**
+ * Get the estimated remaining value of the OpenAI OAuth account pool
+ * ($20 per 1% of weekly quota remaining, based on cached usage snapshots)
+ * @returns Pool estimate summary
+ */
+export async function getOpenAIPoolEstimate(): Promise<OpenAIPoolEstimate> {
+  const { data } = await apiClient.get<OpenAIPoolEstimate>('/admin/accounts/openai-pool-estimate')
+  return data
+}
+
 export const accountsAPI = {
   list,
   listWithEtag,
@@ -958,7 +976,8 @@ export const accountsAPI = {
   saveOllamaCloudUsageSession,
   deleteOllamaCloudUsageSession,
   setOllamaCloudUsageAutoRefresh,
-  refreshOllamaCloudUsage
+  refreshOllamaCloudUsage,
+  getOpenAIPoolEstimate
 }
 
 export default accountsAPI

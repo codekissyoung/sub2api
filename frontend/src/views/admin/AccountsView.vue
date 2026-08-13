@@ -17,6 +17,16 @@
             @create="showCreate = true"
           >
             <template #after>
+              <!-- OpenAI Pool Estimate Chip -->
+              <div
+                v-if="poolEstimate"
+                class="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-sm text-gray-600 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-300"
+                :title="poolEstimateTooltip"
+              >
+                <Icon name="dollar" size="sm" class="text-emerald-500" />
+                <span class="hidden md:inline">{{ poolEstimateText }}</span>
+              </div>
+
               <!-- Auto Refresh Dropdown -->
               <div class="relative" ref="autoRefreshDropdownRef">
                 <button
@@ -444,6 +454,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
+import type { OpenAIPoolEstimate } from '@/api/admin/accounts'
 import { useTableLoader } from '@/composables/useTableLoader'
 import { useStepUp, isStepUpBlocked, isStepUpCancelled, stepUpBlockReason } from '@/composables/useStepUp'
 import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
@@ -1237,7 +1248,7 @@ const refreshAccountsIncrementally = async () => {
 }
 
 const handleManualRefresh = async () => {
-  await Promise.all([load(), loadUpstreamBillingProbeGlobalState()])
+  await Promise.all([load(), loadUpstreamBillingProbeGlobalState(), loadOpenAIPoolEstimate()])
   // Force usage cells to refetch /usage on explicit user refresh.
   usageManualRefreshToken.value += 1
 }
@@ -1250,6 +1261,40 @@ const loadUpstreamBillingProbeGlobalState = async () => {
     console.error('Failed to load upstream billing probe settings:', error)
   }
 }
+
+// OpenAI 号池剩余金额估值（周限剩余 1% ≈ $20，只读展示）
+const poolEstimate = ref<OpenAIPoolEstimate | null>(null)
+
+const loadOpenAIPoolEstimate = async () => {
+  try {
+    poolEstimate.value = await adminAPI.accounts.getOpenAIPoolEstimate()
+  } catch (error) {
+    console.error('Failed to load OpenAI pool estimate:', error)
+  }
+}
+
+const poolEstimateText = computed(() => {
+  const estimate = poolEstimate.value
+  if (!estimate) return ''
+  const usd = `$${Math.round(estimate.total_usd).toLocaleString('en-US')}`
+  return t('admin.accounts.poolEstimate', { usd, count: estimate.account_count })
+})
+
+const poolEstimateTooltip = computed(() => {
+  const estimate = poolEstimate.value
+  if (!estimate) return ''
+  const lines = [t('admin.accounts.poolEstimateHint')]
+  if (estimate.newest_usage_updated_at) {
+    lines.push(t('admin.accounts.poolEstimateNewest', { time: formatDateTime(estimate.newest_usage_updated_at) }))
+  }
+  if (estimate.oldest_usage_updated_at) {
+    lines.push(t('admin.accounts.poolEstimateOldest', { time: formatDateTime(estimate.oldest_usage_updated_at) }))
+  }
+  if (estimate.missing_data_count > 0) {
+    lines.push(t('admin.accounts.poolEstimateMissing', { count: estimate.missing_data_count }))
+  }
+  return lines.join('\n')
+})
 
 const closeAccountToolsDropdown = () => {
   showAccountToolsDropdown.value = false
@@ -2053,6 +2098,7 @@ onMounted(async () => {
 
   load()
   loadUpstreamBillingProbeGlobalState()
+  loadOpenAIPoolEstimate()
   try {
     const [p, g] = await Promise.all([adminAPI.proxies.getAll(), adminAPI.groups.getAll()])
     proxies.value = p
