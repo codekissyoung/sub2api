@@ -1420,6 +1420,18 @@ func (h *AccountHandler) RotateOpenAIRefreshToken(c *gin.Context) {
 		service.NewOpenAITokenRefresher(h.openaiOAuthService, nil),
 	)
 	if err != nil {
+		// 上游明确拒绝（400/401，如 invalid_refresh_token / refresh_token_invalidated）
+		// 时改以 400 返回结构化原因：5xx 经过 Cloudflare 会被其错误页覆盖，
+		// 管理员将看不到真正的失败原因。
+		if infraerrors.Reason(err) == openAIRefreshFailedReason {
+			if rejection := parseOpenAIUpstreamRejection(infraerrors.Message(err)); rejection != nil {
+				response.ErrorWithDetails(c, http.StatusBadRequest, rejection.errorMessage(), "OPENAI_RT_ROTATION_REJECTED", map[string]string{
+					"needs_reauth":  "true",
+					"upstream_code": rejection.code,
+				})
+				return
+			}
+		}
 		response.ErrorFrom(c, err)
 		return
 	}

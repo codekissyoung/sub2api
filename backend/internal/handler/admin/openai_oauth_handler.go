@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -271,6 +272,17 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	// Use OpenAI OAuth service to refresh token
 	tokenInfo, err := h.openaiOAuthService.RefreshAccountToken(c.Request.Context(), account)
 	if err != nil {
+		// 与轮换端点同理：上游明确拒绝（400/401）时改返 400 + 真实上游错误码，
+		// 避免 502 经过 Cloudflare 被其错误页覆盖、管理员看不到真正原因。
+		if infraerrors.Reason(err) == openAIRefreshFailedReason {
+			if rejection := parseOpenAIUpstreamRejection(infraerrors.Message(err)); rejection != nil {
+				response.ErrorWithDetails(c, http.StatusBadRequest, rejection.errorMessage(), "OPENAI_REFRESH_REJECTED", map[string]string{
+					"needs_reauth":  "true",
+					"upstream_code": rejection.code,
+				})
+				return
+			}
+		}
 		response.ErrorFrom(c, err)
 		return
 	}
