@@ -61,9 +61,14 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	oauthRefreshAPI         *service.OAuthRefreshAPI
 	grokImportProber        grokImportProber
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
+}
+
+func (h *AccountHandler) SetOAuthRefreshAPI(refreshAPI *service.OAuthRefreshAPI) {
+	h.oauthRefreshAPI = refreshAPI
 }
 
 // SetUpstreamBillingProbeService attaches the optional remote billing probe service.
@@ -1372,6 +1377,69 @@ func (h *AccountHandler) Refresh(c *gin.Context) {
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), updatedAccount))
+}
+
+// RotateOpenAIRefreshToken forces a one-time OpenAI refresh-token rotation.
+// POST /api/v1/admin/accounts/:id/rotate-refresh-token
+func (h *AccountHandler) RotateOpenAIRefreshToken(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.NotFound(c, "Account not found")
+		return
+	}
+	if account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeOAuth {
+		response.BadRequest(c, "Only OpenAI OAuth accounts support refresh-token rotation")
+		return
+	}
+	if account.IsCredentialShadow() {
+		response.BadRequest(c, "Cannot rotate a spark shadow account; its credentials are managed by the parent account")
+		return
+	}
+	if account.IsOpenAIPersonalAccessToken() {
+		response.BadRequest(c, "Cannot rotate a personal access token account")
+		return
+	}
+	if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+		response.BadRequest(c, "No refresh token is available for rotation")
+		return
+	}
+	if h.oauthRefreshAPI == nil || h.openaiOAuthService == nil {
+		response.InternalError(c, "OpenAI refresh-token rotation is not configured")
+		return
+	}
+
+	result, err := h.oauthRefreshAPI.RotateRefreshToken(
+		c.Request.Context(),
+		account,
+		service.NewOpenAITokenRefresher(h.openaiOAuthService, nil),
+	)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if result == nil || result.LockHeld {
+		response.Error(c, http.StatusConflict, "This account is already refreshing; try again shortly")
+		return
+	}
+	if !result.Refreshed || result.Account == nil {
+		response.InternalError(c, "Refresh-token rotation did not complete")
+		return
+	}
+
+	if h.tokenCacheInvalidator != nil {
+		if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(c.Request.Context(), result.Account); invalidateErr != nil {
+			log.Printf("[WARN] Failed to invalidate token cache for account %d after RT rotation: %v", accountID, invalidateErr)
+		}
+	}
+	h.adminService.EnsureOpenAIPrivacy(c.Request.Context(), result.Account)
+
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), result.Account))
 }
 
 // ApplyOAuthCredentialsRequest is the payload for persisting re-authorized OAuth credentials.

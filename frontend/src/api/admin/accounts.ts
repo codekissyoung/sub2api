@@ -256,6 +256,14 @@ export async function refreshCredentials(id: number): Promise<Account> {
 }
 
 /**
+ * Immediately rotate an OpenAI OAuth account's refresh token.
+ */
+export async function rotateOpenAIRefreshToken(id: number): Promise<Account> {
+  const { data } = await apiClient.post<Account>(`/admin/accounts/${id}/rotate-refresh-token`)
+  return data
+}
+
+/**
  * Apply OAuth credentials after re-authorization.
  *
  * Unlike `update()`, this endpoint:
@@ -995,6 +1003,7 @@ export const accountsAPI = {
   toggleStatus,
   testAccount,
   refreshCredentials,
+  rotateOpenAIRefreshToken,
   applyOAuthCredentials,
   getStats,
   clearError,

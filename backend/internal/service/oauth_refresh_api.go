@@ -5,10 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 // OAuthRefreshExecutor 各平台实现的 OAuth 刷新执行器
@@ -48,6 +51,8 @@ var (
 
 type oauthRefreshRequestPathKey struct{}
 
+type oauthRefreshManualRotationKey struct{}
+
 func withOAuthRefreshRequestPath(ctx context.Context) context.Context {
 	return context.WithValue(ctx, oauthRefreshRequestPathKey{}, true)
 }
@@ -55,6 +60,11 @@ func withOAuthRefreshRequestPath(ctx context.Context) context.Context {
 func isOAuthRefreshRequestPath(ctx context.Context) bool {
 	requestPath, _ := ctx.Value(oauthRefreshRequestPathKey{}).(bool)
 	return requestPath
+}
+
+func isOAuthRefreshManualRotation(ctx context.Context) bool {
+	manualRotation, _ := ctx.Value(oauthRefreshManualRotationKey{}).(bool)
+	return manualRotation
 }
 
 type contextMutex struct {
@@ -131,6 +141,35 @@ type OAuthRefreshAPI struct {
 	localLocks  sync.Map // key: cacheKey string -> value: *contextMutex
 }
 
+type forcedRefreshTokenRotationExecutor struct {
+	OAuthRefreshExecutor
+}
+
+func (e *forcedRefreshTokenRotationExecutor) NeedsRefresh(_ *Account, _ time.Duration) bool {
+	return true
+}
+
+func (e *forcedRefreshTokenRotationExecutor) Refresh(ctx context.Context, account *Account) (map[string]any, error) {
+	credentials, err := e.OAuthRefreshExecutor.Refresh(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+
+	oldRefreshToken := strings.TrimSpace(account.GetCredential("refresh_token"))
+	newRefreshToken, _ := credentials["refresh_token"].(string)
+	newRefreshToken = strings.TrimSpace(newRefreshToken)
+	if newRefreshToken == "" {
+		return nil, infraerrors.New(http.StatusBadGateway, "OAUTH_RT_ROTATION_NO_REPLACEMENT",
+			"OAuth provider did not return a replacement refresh token")
+	}
+	if newRefreshToken == oldRefreshToken {
+		return nil, infraerrors.New(http.StatusBadGateway, "OAUTH_RT_ROTATION_UNCONFIRMED",
+			"OAuth provider returned the existing refresh token; rotation was not confirmed")
+	}
+
+	return credentials, nil
+}
+
 // NewOAuthRefreshAPI 创建统一刷新 API
 // 可选传入 lockTTL 覆盖默认的 60s 分布式锁 TTL
 func NewOAuthRefreshAPI(accountRepo AccountRepository, tokenCache GeminiTokenCache, lockTTL ...time.Duration) *OAuthRefreshAPI {
@@ -154,6 +193,24 @@ func (api *OAuthRefreshAPI) getLocalLock(cacheKey string) *contextMutex {
 		api.localLocks.Store(cacheKey, mu)
 	}
 	return mu
+}
+
+// RotateRefreshToken immediately consumes the current refresh token and stores
+// the provider-issued replacement. It uses the same local/distributed lock as
+// automatic refresh, but deliberately bypasses the expiry-window check.
+func (api *OAuthRefreshAPI) RotateRefreshToken(
+	ctx context.Context,
+	account *Account,
+	executor OAuthRefreshExecutor,
+) (*OAuthRefreshResult, error) {
+	if executor == nil {
+		return nil, errors.New("OAuth refresh executor is nil")
+	}
+	ctx = context.WithValue(ctx, oauthRefreshManualRotationKey{}, true)
+	ctx = withOAuthRefreshRequestPath(ctx)
+	return api.RefreshIfNeeded(ctx, account, &forcedRefreshTokenRotationExecutor{
+		OAuthRefreshExecutor: executor,
+	}, 0)
 }
 
 // RefreshIfNeeded 在分布式锁保护下按需刷新 OAuth token
@@ -225,7 +282,7 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 	if freshAccount.ID != account.ID {
 		return nil, fmt.Errorf("%w: account identity mismatch", errOAuthRefreshAccountRereadFailed)
 	}
-	if !freshAccount.IsActive() {
+	if !freshAccount.IsActive() && !isOAuthRefreshManualRotation(ctx) {
 		if requestPath {
 			return nil, fmt.Errorf("%w: account is not active", errOAuthRefreshAccountStateChanged)
 		}
@@ -276,7 +333,8 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 					"platform", freshAccount.Platform,
 				)
 				return &OAuthRefreshResult{
-					Account: recoveredAccount,
+					Refreshed: isOAuthRefreshManualRotation(ctx),
+					Account:   recoveredAccount,
 				}, nil
 			}
 		}

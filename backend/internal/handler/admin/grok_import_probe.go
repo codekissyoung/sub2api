@@ -209,6 +209,7 @@ func ProvideAccountHandler(
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	grokQuotaService *service.GrokQuotaService,
+	refreshAPI *service.OAuthRefreshAPI,
 ) *AccountHandler {
 	handler := NewAccountHandler(
 		adminService,
@@ -227,5 +228,6 @@ func ProvideAccountHandler(
 		tokenCacheInvalidator,
 	)
 	handler.grokImportProber = grokQuotaService
+	handler.SetOAuthRefreshAPI(refreshAPI)
 	return handler
 }

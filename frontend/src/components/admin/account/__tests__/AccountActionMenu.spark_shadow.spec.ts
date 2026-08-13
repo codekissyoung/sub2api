@@ -149,7 +149,21 @@ describe('AccountActionMenu — spark shadow 按钮可见性', () => {
     })
     const body = getBodyText()
     expect(body).toContain('admin.accounts.reAuthorize')
+    expect(body).toContain('admin.accounts.rotateRefreshToken')
+    expect(body).not.toContain('admin.accounts.refreshToken')
     expect(body).toContain('admin.accounts.setPrivacy')
+    wrapper.unmount()
+  })
+
+  it('非 OpenAI OAuth 账号保留通用刷新令牌按钮', () => {
+    const account = makeAccount({ platform: 'anthropic', type: 'oauth', parent_account_id: null })
+    const wrapper = mount(AccountActionMenu, {
+      props: { show: true, account, position },
+      attachTo: document.body,
+    })
+    const body = getBodyText()
+    expect(body).toContain('admin.accounts.refreshToken')
+    expect(body).not.toContain('admin.accounts.rotateRefreshToken')
     wrapper.unmount()
   })
 

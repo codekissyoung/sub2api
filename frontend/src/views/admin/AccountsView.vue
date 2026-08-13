@@ -2273,12 +2273,24 @@ const handleDuplicateAccount = async (a: Account) => {
   }
 }
 const handleRefresh = async (a: Account) => {
+  const rotatesOpenAIRT = a.platform === 'openai' && a.type === 'oauth'
+  if (rotatesOpenAIRT && !confirm(t('admin.accounts.rotateRefreshTokenConfirm', { name: a.name }))) return
+
   try {
-    const updated = await adminAPI.accounts.refreshCredentials(a.id)
+    const updated = rotatesOpenAIRT
+      ? await adminAPI.accounts.rotateOpenAIRefreshToken(a.id)
+      : await adminAPI.accounts.refreshCredentials(a.id)
     patchAccountInList(updated)
     enterAutoRefreshSilentWindow()
-  } catch (error) {
+    appStore.showSuccess(t(rotatesOpenAIRT ? 'admin.accounts.rotateRefreshTokenSuccess' : 'admin.accounts.tokenRefreshed'))
+  } catch (error: any) {
     console.error('Failed to refresh credentials:', error)
+    if (rotatesOpenAIRT) {
+      const detail = typeof error?.message === 'string' && error.message !== 'internal error' ? `: ${error.message}` : ''
+      appStore.showError(`${t('admin.accounts.rotateRefreshTokenFailed')}${detail}`)
+    } else {
+      appStore.showError(error?.message || t('common.error'))
+    }
   }
 }
 const handleRecoverState = async (a: Account) => {

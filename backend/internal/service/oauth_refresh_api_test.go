@@ -1050,6 +1050,75 @@ func TestNewOAuthRefreshAPI_ZeroTTLUsesDefault(t *testing.T) {
 	require.Equal(t, defaultRefreshLockTTL, api.lockTTL)
 }
 
+func TestOAuthRefreshAPI_RotateRefreshToken_ForcesRotationBeforeExpiry(t *testing.T) {
+	account := &Account{
+		ID:       501,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"access_token":  "old-access",
+			"refresh_token": "old-refresh",
+			"expires_at":    time.Now().Add(4 * time.Hour).Format(time.RFC3339),
+		},
+	}
+	repo := &refreshAPIAccountRepo{account: account}
+	executor := &refreshAPIExecutorStub{
+		needsRefresh: false,
+		credentials: map[string]any{
+			"access_token":  "new-access",
+			"refresh_token": "new-refresh",
+		},
+	}
+
+	result, err := NewOAuthRefreshAPI(repo, nil).RotateRefreshToken(context.Background(), account, executor)
+
+	require.NoError(t, err)
+	require.True(t, result.Refreshed)
+	require.Equal(t, "new-refresh", repo.account.GetCredential("refresh_token"))
+	require.NotZero(t, repo.account.GetCredentialAsInt64("_token_version"))
+}
+
+func TestOAuthRefreshAPI_RotateRefreshToken_RequiresReplacementRT(t *testing.T) {
+	tests := []struct {
+		name            string
+		newRefreshToken string
+		wantError       string
+	}{
+		{name: "missing", wantError: "did not return a replacement refresh token"},
+		{name: "unchanged", newRefreshToken: "old-refresh", wantError: "rotation was not confirmed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			account := &Account{
+				ID:       502,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+				Status:   StatusActive,
+				Credentials: map[string]any{
+					"access_token":  "old-access",
+					"refresh_token": "old-refresh",
+				},
+			}
+			repo := &refreshAPIAccountRepo{account: account}
+			executor := &refreshAPIExecutorStub{
+				needsRefresh: false,
+				credentials: map[string]any{
+					"access_token":  "new-access",
+					"refresh_token": tt.newRefreshToken,
+				},
+			}
+
+			result, err := NewOAuthRefreshAPI(repo, nil).RotateRefreshToken(context.Background(), account, executor)
+
+			require.ErrorContains(t, err, tt.wantError)
+			require.NotNil(t, result)
+			require.Equal(t, "old-refresh", repo.account.GetCredential("refresh_token"))
+		})
+	}
+}
+
 // ========== isInvalidGrantError tests ==========
 
 func TestIsInvalidGrantError(t *testing.T) {
