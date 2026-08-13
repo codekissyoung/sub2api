@@ -465,38 +465,6 @@ export async function batchUpdateCredentials(request: {
 }
 
 /**
- * Bulk update multiple accounts
- * @param accountIds - Array of account IDs
- * @param updates - Fields to update
- * @returns Success confirmation
- */
-export async function bulkUpdate(
-  accountIdsOrPayload: number[] | Record<string, unknown>,
-  updates?: Record<string, unknown>
-): Promise<{
-  success: number
-  failed: number
-  success_ids?: number[]
-  failed_ids?: number[]
-  results: Array<{ account_id: number; success: boolean; error?: string }>
-  }> {
-  const payload = Array.isArray(accountIdsOrPayload)
-    ? {
-        account_ids: accountIdsOrPayload,
-        ...(updates ?? {})
-      }
-    : accountIdsOrPayload
-  const { data } = await apiClient.post<{
-    success: number
-    failed: number
-    success_ids?: number[]
-    failed_ids?: number[]
-    results: Array<{ account_id: number; success: boolean; error?: string }>
-  }>('/admin/accounts/bulk-update', payload)
-  return data
-}
-
-/**
  * Get account today statistics
  * @param id - Account ID
  * @returns Today's stats (requests, tokens, cost)
@@ -730,61 +698,12 @@ export async function refreshOpenAIToken(
 }
 
 /**
- * Batch operation result type
- */
-export interface BatchOperationResult {
-  total: number
-  success: number
-  failed: number
-  success_ids?: number[]
-  failed_ids?: number[]
-  errors?: Array<{ account_id: number; error: string }>
-  warnings?: Array<{ account_id: number; warning: string }>
-}
-
-/**
  * Revert account proxy to original before fallback
  * @param id - Account ID
  * @returns Success confirmation
  */
 export async function revertProxyFallback(id: number): Promise<{ message: string }> {
   const { data } = await apiClient.post<{ message: string }>(`/admin/accounts/${id}/revert-proxy-fallback`)
-  return data
-}
-
-/**
- * Delete multiple accounts with bounded server-side concurrency.
- */
-export async function batchDelete(accountIds: number[]): Promise<BatchOperationResult> {
-  const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-delete', {
-    account_ids: accountIds
-  })
-  return data
-}
-
-/**
- * Batch clear account errors
- * @param accountIds - Array of account IDs
- * @returns Batch operation result
- */
-export async function batchClearError(accountIds: number[]): Promise<BatchOperationResult> {
-  const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-clear-error', {
-    account_ids: accountIds
-  })
-  return data
-}
-
-/**
- * Batch refresh account credentials
- * @param accountIds - Array of account IDs
- * @returns Batch operation result
- */
-export async function batchRefresh(accountIds: number[]): Promise<BatchOperationResult> {
-  const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-refresh', {
-    account_ids: accountIds,
-  }, {
-    timeout: 120000  // 120s timeout for large batch refreshes
-  })
   return data
 }
 
@@ -939,14 +858,6 @@ export async function probeUpstreamBilling(id: number): Promise<UpstreamBillingP
   return data
 }
 
-export async function probeUpstreamBillingBatch(accountIds: number[]): Promise<UpstreamBillingProbeResult[]> {
-  const { data } = await apiClient.post<{ results: UpstreamBillingProbeResult[] }>(
-    '/admin/accounts/upstream-billing-probe/batch',
-    { account_ids: accountIds }
-  )
-  return data.results
-}
-
 export async function getOllamaCloudUsageSettings(): Promise<OllamaCloudUsageSettings> {
   const { data } = await apiClient.get<OllamaCloudUsageSettings>('/admin/accounts/ollama-cloud-usage/settings')
   return data
@@ -1025,7 +936,6 @@ export const accountsAPI = {
   refreshOpenAIToken,
   batchCreate,
   batchUpdateCredentials,
-  bulkUpdate,
   previewFromCrs,
   syncFromCrs,
   exportData,
@@ -1033,9 +943,6 @@ export const accountsAPI = {
   importCodexSession,
   createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,
-  batchDelete,
-  batchClearError,
-  batchRefresh,
   setPrivacy,
   revertProxyFallback,
   refreshOpenAIQuota,
@@ -1045,7 +952,6 @@ export const accountsAPI = {
   updateUpstreamBillingProbeSettings,
   setUpstreamBillingProbeEnabled,
   probeUpstreamBilling,
-  probeUpstreamBillingBatch,
   getOllamaCloudUsageSettings,
   updateOllamaCloudUsageSettings,
   getOllamaCloudUsage,

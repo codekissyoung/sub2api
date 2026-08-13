@@ -13,7 +13,6 @@ vi.mock('@/api/client', () => ({
 import {
   getUpstreamBillingProbeSettings,
   probeUpstreamBilling,
-  probeUpstreamBillingBatch,
   setUpstreamBillingProbeEnabled,
   updateUpstreamBillingProbeSettings
 } from '@/api/admin/accounts'
@@ -36,18 +35,15 @@ describe('admin account upstream billing probe API', () => {
     expect(put).toHaveBeenCalledWith('/admin/accounts/upstream-billing-probe/settings', settings)
   })
 
-  it('uses dedicated account and batch endpoints', async () => {
+  it('uses the dedicated per-account endpoint', async () => {
     const result = { account_id: 7, snapshot: { status: 'unsupported' } }
     put.mockResolvedValueOnce({ data: {} })
     post.mockResolvedValueOnce({ data: result })
-    post.mockResolvedValueOnce({ data: { results: [result] } })
 
     await setUpstreamBillingProbeEnabled(7, true)
     await expect(probeUpstreamBilling(7)).resolves.toEqual(result)
-    await expect(probeUpstreamBillingBatch([7])).resolves.toEqual([result])
 
     expect(put).toHaveBeenCalledWith('/admin/accounts/7/upstream-billing-probe', { enabled: true })
-    expect(post).toHaveBeenNthCalledWith(1, '/admin/accounts/7/upstream-billing-probe')
-    expect(post).toHaveBeenNthCalledWith(2, '/admin/accounts/upstream-billing-probe/batch', { account_ids: [7] })
+    expect(post).toHaveBeenCalledWith('/admin/accounts/7/upstream-billing-probe')
   })
 })

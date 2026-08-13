@@ -34,7 +34,12 @@
               </button>
               <button @click="$emit('refresh-token', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-purple-600 hover:bg-gray-100 dark:hover:bg-dark-700">
                 <Icon name="refresh" size="sm" />
-                {{ isOpenAIOAuth ? t('admin.accounts.rotateRefreshToken') : t('admin.accounts.refreshToken') }}
+                {{ t('admin.accounts.refreshToken') }}
+              </button>
+              <!-- 轮换 RT 与日常刷新分离:轮换会立即作废旧 RT 且不可撤销,故单独成项(仅 OpenAI OAuth)。 -->
+              <button v-if="isOpenAIOAuth" @click="$emit('rotate-refresh-token', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-rose-600 hover:bg-gray-100 dark:hover:bg-dark-700">
+                <Icon name="sync" size="sm" />
+                {{ t('admin.accounts.rotateRefreshToken') }}
               </button>
             </template>
             <button v-if="isOpenAIOAuthParent" @click="$emit('create-spark-shadow', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-amber-600 hover:bg-gray-100 dark:hover:bg-dark-700">
@@ -68,7 +73,7 @@ import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow'])
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'rotate-refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow'])
 const { t } = useI18n()
 const canDuplicate = computed(() => {
   if (!props.account || props.account.parent_account_id != null) return false
