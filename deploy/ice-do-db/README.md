@@ -30,7 +30,15 @@ the live mode-0600 configuration.
 
 ## Source build
 
-Always build the embedded frontend before the Go binary:
+Always deploy with `deploy/ice-do-db/deploy.sh` — it runs the full flow
+(frontend build, tests, backend build, backup, install, restart, health AND
+page-route verification, ledger). The Go binary MUST be built with
+`-tags embed`; without it the frontend is not embedded and every page route
+returns 404 while APIs keep working (incident 2026-08-13). The script refuses
+to ship a binary without the embed marker, so do not hand-run `go build` or
+`make build` for production.
+
+Manual build steps (only for reference — the script runs these):
 
 ```bash
 corepack enable
