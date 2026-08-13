@@ -248,7 +248,8 @@ describe('AccountUsageCell', () => {
     await flushPromises()
 
     expect(getUsage).toHaveBeenCalledWith(2000)
-    expect(wrapper.text()).toContain('5h|15|300')
+    // OpenAI 号不再展示 5h 窗口，只保留 7d
+    expect(wrapper.text()).not.toContain('5h|')
     expect(wrapper.text()).toContain('7d|77|300')
   })
 
@@ -309,8 +310,8 @@ describe('AccountUsageCell', () => {
     await flushPromises()
 
     expect(getUsage).toHaveBeenCalledWith(2001)
-    // 单一数据源：始终使用 /usage API 返回值，忽略 codex 快照
-    expect(wrapper.text()).toContain('5h|18|900')
+    // 单一数据源：始终使用 /usage API 返回值，忽略 codex 快照；不展示 5h 窗口
+    expect(wrapper.text()).not.toContain('5h|')
     expect(wrapper.text()).toContain('7d|36|900')
   })
 
@@ -380,8 +381,8 @@ describe('AccountUsageCell', () => {
     // 手动刷新再拉一次
     expect(getUsage).toHaveBeenCalledTimes(2)
     expect(getUsage).toHaveBeenCalledWith(2010)
-    // 单一数据源：始终使用 /usage API 值
-    expect(wrapper.text()).toContain('5h|18|900')
+    // 单一数据源：始终使用 /usage API 值；不展示 5h 窗口
+    expect(wrapper.text()).not.toContain('5h|')
   })
 
   it('OpenAI OAuth 在无 codex 快照时会回退显示 usage 接口窗口', async () => {
@@ -435,7 +436,7 @@ describe('AccountUsageCell', () => {
 	await flushPromises()
 
 	expect(getUsage).toHaveBeenCalledWith(2002)
-	expect(wrapper.text()).toContain('5h|0|27700')
+	expect(wrapper.text()).not.toContain('5h|')
 	expect(wrapper.text()).toContain('7d|0|27700')
   })
 
@@ -494,7 +495,7 @@ describe('AccountUsageCell', () => {
 	})
 
 	await flushPromises()
-	expect(wrapper.text()).toContain('5h|0|100')
+	expect(wrapper.text()).not.toContain('5h|')
 	expect(getUsage).toHaveBeenCalledTimes(1)
 
 	await wrapper.setProps({
@@ -509,7 +510,7 @@ describe('AccountUsageCell', () => {
 
 	await flushPromises()
 	expect(getUsage).toHaveBeenCalledTimes(2)
-	expect(wrapper.text()).toContain('5h|0|200')
+	expect(wrapper.text()).not.toContain('5h|')
   })
 
   it('OpenAI 重置响应更新账号行时不会额外拉取 usage', async () => {
@@ -611,7 +612,7 @@ describe('AccountUsageCell', () => {
 	await flushPromises()
 
   expect(getUsage).toHaveBeenCalledWith(2004)
-  expect(wrapper.text()).toContain('5h|100|106540000')
+  expect(wrapper.text()).not.toContain('5h|')
   expect(wrapper.text()).toContain('7d|100|106540000')
   })
 
