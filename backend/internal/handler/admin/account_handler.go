@@ -1425,6 +1425,11 @@ func (h *AccountHandler) RotateOpenAIRefreshToken(c *gin.Context) {
 		// 管理员将看不到真正的失败原因。
 		if infraerrors.Reason(err) == openAIRefreshFailedReason {
 			if rejection := parseOpenAIUpstreamRejection(infraerrors.Message(err)); rejection != nil {
+				// 该分支以 400 返回、不再经过 ErrorFrom 的 ERROR 日志，
+				// 必须在此落日志，否则服务端对上游拒绝原因完全无记录
+				// （2026-08-14 refresh_token_reused 排查时实际踩到）。
+				log.Printf("[WARN] OpenAI RT rotation rejected for account %d: upstream status %d, code %q, message %q",
+					accountID, rejection.status, rejection.code, rejection.message)
 				response.ErrorWithDetails(c, http.StatusBadRequest, rejection.errorMessage(), "OPENAI_RT_ROTATION_REJECTED", map[string]string{
 					"needs_reauth":  "true",
 					"upstream_code": rejection.code,

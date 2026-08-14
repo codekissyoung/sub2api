@@ -276,6 +276,13 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		// 避免 502 经过 Cloudflare 被其错误页覆盖、管理员看不到真正原因。
 		if infraerrors.Reason(err) == openAIRefreshFailedReason {
 			if rejection := parseOpenAIUpstreamRejection(infraerrors.Message(err)); rejection != nil {
+				// 该分支以 400 返回、不再经过 ErrorFrom 的 ERROR 日志，
+				// 必须落日志，否则服务端对上游拒绝原因无记录。
+				slog.Warn("openai_refresh_upstream_rejected",
+					"account_id", account.ID,
+					"upstream_status", rejection.status,
+					"upstream_code", rejection.code,
+					"upstream_message", rejection.message)
 				response.ErrorWithDetails(c, http.StatusBadRequest, rejection.errorMessage(), "OPENAI_REFRESH_REJECTED", map[string]string{
 					"needs_reauth":  "true",
 					"upstream_code": rejection.code,
