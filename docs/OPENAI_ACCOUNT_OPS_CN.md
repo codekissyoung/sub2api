@@ -1,6 +1,6 @@
 # OpenAI OAuth 账号运维手册（探测 / 诊断 / 轮换 / 删除）
 
-本文沉淀 2026-08-13 处理 dahunt.x1 / idikrm11 两个死号的实战经验，适用于 Codex 号池（platform=openai, type=oauth）的日常运维。
+本文沉淀 2026-08-13 处理 dahunt.x1 / idikrm11 两个死号、以及 2026-08-14 诊断 #25（harish@getgaana.com）RT 被抢用的实战经验，适用于 Codex 号池（platform=openai, type=oauth）的日常运维。
 
 纪律：**token 不离开生产机，不回显原文**（只回显长度、前缀、JWT claims）；生产库写操作必须先获用户确认。
 
@@ -63,6 +63,8 @@ REMOTE
 
 配额只读端点（app 的「查询额度」走这里）：`GET https://chatgpt.com/backend-api/wham/usage`。
 
+注意：该端点 200 **只证明 AT 认证有效**，不证明能打模型（账号可能另有隐性限制）；要下"号能用"的结论必须发真实 responses 请求实测（2026-08-14 #25 诊断时确立的标准）。
+
 ## 3. RT 语义（最重要的心智模型）
 
 - OpenAI 的 RT 是**一次性轮换**的：每用 RT 刷一次，上游发新 RT、**旧 RT 立即作废**。谁手里有链谁后刷谁是活的。
@@ -71,8 +73,19 @@ REMOTE
   - 轮换 RT = 显式换整条链，**不可逆**；若上游已消费旧 RT 但新凭证保存失败，只能重新授权。
 - 上游错误码判读：
   - `invalid_refresh_token`：这条 RT 无效——典型是**链在别处被消费**（号商共享凭证/别处也登录了同一账号）。
+  - `refresh_token_reused`（"already been used to generate a new access token"）：库存 RT 是**已被消费过的旧副本**，别人先轮换赢了。与上一条同因不同码。
   - `refresh_token_invalidated`（"Your session has ended"）：**整个 session 被端**（改密/登出所有设备/风控），AT+RT 一起死。
 - 没有账号密码 = 无法重新授权 = RT 死了号就是耗材。买号尽量要到可自助登录的方式；只给 RT 的号按一次性耗材对待。
+
+### RT 死 ≠ AT 死（2026-08-14 #25 实测）
+
+RT 被抢用只断「续约能力」，**不必然连带撤销已签发的 AT**——旧 AT 按自身 JWT exp 继续活着，可正常跑流量。实测 #25 RT 已 `refresh_token_reused`，但库存 AT：`GET /wham/usage` 200 + 完全模拟 codex 请求包打 `gpt-5.4-mini` 200 SSE，双验证通过，AT 还能用到 `expires_at`。
+
+推论处置口径：**只有 AT 和 RT 都死的号才按死号处理**。RT 死 + AT 活的号：
+
+1. 留在池里继续服役到 AT 自然过期（`credentials->>'expires_at'` 即死期）；
+2. 到期时网关自动刷新会撞上死 RT 报错，届时再重新授权或删除；
+3. 注意残余风险：握着活链的一方可以 logout 提前端掉 AT，且对方消耗同一账号的周限额。
 
 ## 4. 删除账号与留痕
 
