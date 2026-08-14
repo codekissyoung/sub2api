@@ -1364,6 +1364,20 @@ func (h *AccountHandler) Refresh(c *gin.Context) {
 
 	updatedAccount, warning, err := h.refreshSingleAccount(c.Request.Context(), account)
 	if err != nil {
+		// 与轮换端点同理：上游明确拒绝（400/401）时改返 400 + 真实上游错误码，
+		// 避免 502 经过 Cloudflare 被其错误页覆盖、管理员看不到真正原因。
+		// 该通用刷新路径是前端「刷新」按钮实际调用的端点（2026-08-14 #34 实测仍返 502 踩到）。
+		if infraerrors.Reason(err) == openAIRefreshFailedReason {
+			if rejection := parseOpenAIUpstreamRejection(infraerrors.Message(err)); rejection != nil {
+				log.Printf("[WARN] OpenAI token refresh rejected for account %d: upstream status %d, code %q, message %q",
+					accountID, rejection.status, rejection.code, rejection.message)
+				response.ErrorWithDetails(c, http.StatusBadRequest, rejection.errorMessage(), "OPENAI_REFRESH_REJECTED", map[string]string{
+					"needs_reauth":  "true",
+					"upstream_code": rejection.code,
+				})
+				return
+			}
+		}
 		response.ErrorFrom(c, err)
 		return
 	}
