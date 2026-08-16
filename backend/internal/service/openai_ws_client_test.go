@@ -1,13 +1,23 @@
 package service
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestCoderOpenAIWSClientDialer_DirectTransportForcesIPv4(t *testing.T) {
+	dialer := newDefaultOpenAIWSClientDialer()
+	impl, ok := dialer.(*coderOpenAIWSClientDialer)
+	require.True(t, ok)
+
+	assertOpenAIWSTransportForcesIPv4(t, impl.directHTTPClient())
+}
 
 func TestCoderOpenAIWSClientDialer_ProxyHTTPClientReuse(t *testing.T) {
 	dialer := newDefaultOpenAIWSClientDialer()
@@ -108,7 +118,31 @@ func TestCoderOpenAIWSClientDialer_ProxyTransportTLSHandshakeTimeout(t *testing.
 	transport, ok := client.Transport.(*http.Transport)
 	require.True(t, ok)
 	require.NotNil(t, transport)
-	require.Equal(t, 10*time.Second, transport.TLSHandshakeTimeout)
+	require.Equal(t, openAIWSDialTimeout, transport.TLSHandshakeTimeout)
+	assertOpenAIWSTransportForcesIPv4(t, client)
+}
+
+func assertOpenAIWSTransportForcesIPv4(t *testing.T, client *http.Client) {
+	t.Helper()
+	require.NotNil(t, client)
+
+	transport, ok := client.Transport.(*http.Transport)
+	require.True(t, ok)
+	require.NotNil(t, transport.DialContext)
+
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer func() { _ = listener.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	conn, err := transport.DialContext(ctx, "tcp6", listener.Addr().String())
+	require.NoError(t, err, "transport must override the requested network with tcp4")
+	defer func() { _ = conn.Close() }()
+
+	tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
+	require.True(t, ok)
+	require.NotNil(t, tcpAddr.IP.To4())
 }
 
 func TestCoderOpenAIWSClientConn_DoesNotSupportIdlePingWithoutReader(t *testing.T) {

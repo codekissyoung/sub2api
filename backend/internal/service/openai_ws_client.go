@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -19,6 +20,8 @@ import (
 
 const openAIWSMessageReadLimitBytes int64 = 16 * 1024 * 1024
 const (
+	openAIWSDialTimeout                       = 10 * time.Second
+	openAIWSDialKeepAlive                     = 30 * time.Second
 	openAIWSProxyTransportMaxIdleConns        = 128
 	openAIWSProxyTransportMaxIdleConnsPerHost = 64
 	openAIWSProxyTransportIdleConnTimeout     = 90 * time.Second
@@ -58,11 +61,13 @@ type openAIWSTransportMetricsDialer interface {
 
 func newDefaultOpenAIWSClientDialer() openAIWSClientDialer {
 	return &coderOpenAIWSClientDialer{
+		directClient: newOpenAIWSHTTPClient(nil),
 		proxyClients: make(map[string]*openAIWSProxyClientEntry),
 	}
 }
 
 type coderOpenAIWSClientDialer struct {
+	directClient *http.Client
 	proxyMu      sync.Mutex
 	proxyClients map[string]*openAIWSProxyClientEntry
 	proxyHits    atomic.Int64
@@ -117,6 +122,8 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			return nil, 0, nil, err
 		}
 		opts.HTTPClient = proxyClient
+	} else {
+		opts.HTTPClient = d.directHTTPClient()
 	}
 
 	conn, resp, err := coderws.Dial(ctx, targetURL, opts)
@@ -144,6 +151,42 @@ func (d *coderOpenAIWSClientDialer) Dial(
 	return &coderOpenAIWSClientConn{conn: conn}, 0, respHeaders, nil
 }
 
+func (d *coderOpenAIWSClientDialer) directHTTPClient() *http.Client {
+	if d == nil {
+		return newOpenAIWSHTTPClient(nil)
+	}
+	d.proxyMu.Lock()
+	defer d.proxyMu.Unlock()
+	if d.directClient == nil {
+		d.directClient = newOpenAIWSHTTPClient(nil)
+	}
+	return d.directClient
+}
+
+func newOpenAIWSHTTPClient(proxyURL *url.URL) *http.Client {
+	dialer := &net.Dialer{
+		Timeout:   openAIWSDialTimeout,
+		KeepAlive: openAIWSDialKeepAlive,
+	}
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, _ string, address string) (net.Conn, error) {
+			// ChatGPT's Cloudflare edge can treat IPv4 and IPv6 as different client
+			// identities. Keep the Codex OAuth egress stable on IPv4 for both direct
+			// connections and proxy handshakes.
+			return dialer.DialContext(ctx, "tcp4", address)
+		},
+		MaxIdleConns:        openAIWSProxyTransportMaxIdleConns,
+		MaxIdleConnsPerHost: openAIWSProxyTransportMaxIdleConnsPerHost,
+		IdleConnTimeout:     openAIWSProxyTransportIdleConnTimeout,
+		TLSHandshakeTimeout: openAIWSDialTimeout,
+		ForceAttemptHTTP2:   true,
+	}
+	if proxyURL != nil {
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
+	return &http.Client{Transport: transport}
+}
+
 func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client, error) {
 	if d == nil {
 		return nil, errors.New("openai ws dialer is nil")
@@ -166,15 +209,7 @@ func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client,
 		return entry.client, nil
 	}
 	d.cleanupProxyClientsLocked(now)
-	transport := &http.Transport{
-		Proxy:               http.ProxyURL(parsedProxyURL),
-		MaxIdleConns:        openAIWSProxyTransportMaxIdleConns,
-		MaxIdleConnsPerHost: openAIWSProxyTransportMaxIdleConnsPerHost,
-		IdleConnTimeout:     openAIWSProxyTransportIdleConnTimeout,
-		TLSHandshakeTimeout: 10 * time.Second,
-		ForceAttemptHTTP2:   true,
-	}
-	client := &http.Client{Transport: transport}
+	client := newOpenAIWSHTTPClient(parsedProxyURL)
 	d.proxyClients[normalizedProxy] = &openAIWSProxyClientEntry{
 		client:           client,
 		lastUsedUnixNano: now,

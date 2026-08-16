@@ -645,18 +645,33 @@ is refreshed every 20 seconds. A process that cannot confirm a lease for a
 full lease lifetime closes its local WebSocket rather than continuing outside
 the global cap.
 
-Enable the v2 mode router before selecting an account-level WS mode such as
-`http_bridge`:
+Enable the v2 mode router before selecting an account-level WS mode. For a
+staged rollout, keep accounts without an explicit mode disabled:
 
 ```yaml
 gateway:
   openai_ws:
     mode_router_v2_enabled: true
+    ingress_mode_default: off
 ```
 
 Or set `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true` in the environment.
-Use `http_bridge` for client-WebSocket/upstream-HTTP operation when rolling out
-or mitigating upstream WebSocket issues.
+Set the matching account `extra` key through the Admin UI/API so the change
+also publishes a scheduler outbox event:
+
+- OAuth: `openai_oauth_responses_websockets_v2_mode`
+- API key: `openai_apikey_responses_websockets_v2_mode`
+
+Supported values are `off`, `passthrough`, `ctx_pool`, and `http_bridge`.
+`passthrough` opens one native upstream WebSocket per client connection and is
+the closest mode to a direct Codex connection. `ctx_pool` reuses managed
+upstream connections. `http_bridge` accepts client WebSockets but sends HTTP
+Responses requests upstream, making it useful during rollout or when the
+upstream does not support WebSockets.
+
+Native upstream WebSocket transports use IPv4-only TCP dialing, including the
+connection to an HTTP proxy when one is configured. This keeps the ChatGPT
+Cloudflare egress identity stable on dual-stack hosts.
 
 #### ⚠️ Important: Creating the Admin Account
 
