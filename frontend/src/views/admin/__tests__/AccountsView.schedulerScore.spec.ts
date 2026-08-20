@@ -202,7 +202,8 @@ describe('admin AccountsView scheduler score column', () => {
     const ungroupedCell = wrapper.find('[data-test="scheduler-score-1"]')
     expect(ungroupedCell.exists()).toBe(true)
     expect(ungroupedCell.text()).toContain('1.234567')
-    expect(ungroupedCell.text()).toContain('admin.accounts.schedulerScore.ungrouped')
+    expect(ungroupedCell.text()).not.toContain('admin.accounts.schedulerScore.ungrouped')
+    expect(ungroupedCell.html()).toContain('admin.accounts.schedulerScore.ungrouped')
     expect(ungroupedCell.text()).not.toBe('-')
   })
 
@@ -212,8 +213,9 @@ describe('admin AccountsView scheduler score column', () => {
 
     const groupedCell = wrapper.find('[data-test="scheduler-score-2"]')
     expect(groupedCell.exists()).toBe(true)
-    expect(groupedCell.text()).toContain('group-five')
     expect(groupedCell.text()).toContain('2')
+    expect(groupedCell.text()).not.toContain('group-five')
+    expect(groupedCell.html()).toContain('group-five')
   })
 
   it('keeps scheduler score hidden for old saved column settings until the admin opts in again', async () => {
