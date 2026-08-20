@@ -780,7 +780,8 @@ func TestBuildOpenAISelectionOrderIncludesOverflowOnlyForCostScheduling(t *testi
 		topK:                    1,
 		includeOverflowFallback: true,
 	})
-	require.Equal(t, []int64{1, 2, 3}, []int64{
+	// 低分优先：topK=1 取最低分（ID 3），overflow 按同一比较器升序跟上。
+	require.Equal(t, []int64{3, 2, 1}, []int64{
 		costAware[0].account.ID,
 		costAware[1].account.ID,
 		costAware[2].account.ID,

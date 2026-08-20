@@ -649,11 +649,13 @@ func (h *openAIAccountCandidateHeap) Pop() any {
 }
 
 func isOpenAIAccountCandidateBetter(left openAIAccountCandidateScore, right openAIAccountCandidateScore) bool {
-	if left.score != right.score {
-		return left.score > right.score
-	}
+	// 快刷池排序：优先级值小者优先；同优先级内得分越低越优先。
+	// 低分 = 余量少/接近周限的共享号，要抢在其他共享者之前先刷完。
 	if left.account.Priority != right.account.Priority {
 		return left.account.Priority < right.account.Priority
+	}
+	if left.score != right.score {
+		return left.score < right.score
 	}
 	if left.loadInfo.LoadRate != right.loadInfo.LoadRate {
 		return left.loadInfo.LoadRate < right.loadInfo.LoadRate
@@ -764,15 +766,15 @@ func buildOpenAIWeightedSelectionOrder(
 
 	pool := append([]openAIAccountCandidateScore(nil), candidates...)
 	weights := make([]float64, len(pool))
-	minScore := pool[0].score
+	maxScore := pool[0].score
 	for i := 1; i < len(pool); i++ {
-		if pool[i].score < minScore {
-			minScore = pool[i].score
+		if pool[i].score > maxScore {
+			maxScore = pool[i].score
 		}
 	}
 	for i := range pool {
-		// 将 top-K 分值平移到正区间，避免“单一最高分账号”长期垄断。
-		weight := (pool[i].score - minScore) + 1.0
+		// 低分候选权重更大：同优先级内优先把余量少的号刷到满，同时保留随机打散。
+		weight := (maxScore - pool[i].score) + 1.0
 		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight <= 0 {
 			weight = 1.0
 		}
@@ -981,14 +983,8 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			weights.Reset*resetFactor +
 			weights.QuotaHeadroom*quotaHeadroomFactor +
 			weights.UpstreamCost*(upstreamCostFactor-openAIUpstreamCostNeutralFactor)
-		if req.StickyWeighted {
-			if req.PreviousResponseCanMove && req.StickyPreviousAccountID > 0 && item.account.ID == req.StickyPreviousAccountID {
-				item.score += weights.Previous
-			}
-			if req.StickyAccountID > 0 && item.account.ID == req.StickyAccountID {
-				item.score += weights.SessionSticky
-			}
-		}
+		// 粘性加分不进 score：score 保持为基础分（与管理端「调度权值」展示一致），
+		// 粘性账号由 buildOpenAISelectionOrder 在候选池里显式置顶。
 	}
 	plan.candidates = candidates
 
@@ -1019,19 +1015,31 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAISelectionOrder(
 		ranked := selectTopKOpenAICandidates(pool, groupTopK)
 		var primary []openAIAccountCandidateScore
 		if req.StickyWeighted {
-			for _, stickyID := range []int64{req.StickyPreviousAccountID, req.StickyAccountID} {
-				if stickyID <= 0 {
-					continue
+			pin := func(candidate openAIAccountCandidateScore) {
+				primary = []openAIAccountCandidateScore{candidate}
+				for _, other := range ranked {
+					if other.account != nil && other.account.ID == candidate.account.ID {
+						continue
+					}
+					primary = append(primary, other)
 				}
-				for i, candidate := range ranked {
-					if candidate.account != nil && candidate.account.ID == stickyID {
-						primary = append([]openAIAccountCandidateScore{candidate}, ranked[:i]...)
-						primary = append(primary, ranked[i+1:]...)
+			}
+			// 可移动的 previous-response 绑定只是偏好：凭自身排名进入 topK 才置顶。
+			if req.PreviousResponseCanMove && req.StickyPreviousAccountID > 0 {
+				for _, candidate := range ranked {
+					if candidate.account != nil && candidate.account.ID == req.StickyPreviousAccountID {
+						pin(candidate)
 						break
 					}
 				}
-				if len(primary) > 0 {
-					break
+			}
+			// 粘性会话是硬保证：在整个候选池里找，低分优先排序跌出 topK 也仍最先尝试。
+			if len(primary) == 0 && req.StickyAccountID > 0 {
+				for _, candidate := range pool {
+					if candidate.account != nil && candidate.account.ID == req.StickyAccountID {
+						pin(candidate)
+						break
+					}
 				}
 			}
 		}
