@@ -546,11 +546,11 @@ const accountToolsDropdownStyle = computed(() => ({
   width: `${accountToolsDropdownPosition.width}px`
 }))
 const hiddenColumns = reactive<Set<string>>(new Set())
-const DEFAULT_HIDDEN_COLUMNS = ['today_stats', 'proxy', 'notes', 'priority', 'scheduler_score', 'rate_multiplier']
+const DEFAULT_HIDDEN_COLUMNS = ['platform_type', 'today_stats', 'groups', 'proxy', 'rate_multiplier', 'upstream_billing_rate', 'created_at', 'expires_at', 'notes']
 const HIDDEN_COLUMNS_KEY = 'account-hidden-columns'
-// One-time migration: hide scheduler score for existing admins too, because showing it opt-ins to heavy backend scoring.
+// One-time migration: reset older saved layouts to the compact ops default set once.
 const HIDDEN_COLUMNS_VERSION_KEY = 'account-hidden-columns-version'
-const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
+const HIDDEN_COLUMNS_CURRENT_VERSION = 'compact-ops-default-columns'
 
 // Sorting settings
 const ACCOUNT_SORT_STORAGE_KEY = 'account-table-sort'
@@ -857,9 +857,12 @@ const loadSavedColumns = () => {
       parsed.forEach(key => {
         hiddenColumns.add(key)
       })
-      // Older saved column layouts may have scheduler_score visible; migrate them to the new safe default once.
+      // Older saved layouts predate the compact ops default; reset to the new default set once.
       if (localStorage.getItem(HIDDEN_COLUMNS_VERSION_KEY) !== HIDDEN_COLUMNS_CURRENT_VERSION) {
-        hiddenColumns.add('scheduler_score')
+        hiddenColumns.clear()
+        DEFAULT_HIDDEN_COLUMNS.forEach(key => {
+          hiddenColumns.add(key)
+        })
         localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
         localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
       }

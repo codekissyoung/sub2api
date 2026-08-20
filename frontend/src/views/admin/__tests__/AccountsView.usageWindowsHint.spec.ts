@@ -191,6 +191,9 @@ describe('admin AccountsView usage windows hint', () => {
   })
 
   it('renders the upstream billing trust warning next to the declared-rate column', async () => {
+    // The declared-rate column is hidden by the compact ops default; opt it back on.
+    localStorage.setItem('account-hidden-columns', JSON.stringify([]))
+    localStorage.setItem('account-hidden-columns-version', 'compact-ops-default-columns')
     const wrapper = mountView()
     await flushPromises()
 
