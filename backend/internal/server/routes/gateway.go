@@ -375,6 +375,16 @@ func RegisterGatewayRoutes(
 			h.OpenAIGateway.ResponsesWebSocket(c)
 		})
 		codexDirect.GET("/models", h.OpenAIGateway.CodexModels)
+		// Chat Completions 别名：relay 的 CX 类型上游（如 sub2api-ice-pool）base_url
+		// 带 /backend-api/codex 前缀，chat 请求会被改写成 /chat/completions 拼在其后，
+		// 此前本组无此路由，chat 协议流量全部 404。
+		codexDirect.POST("/chat/completions", func(c *gin.Context) {
+			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
+				h.OpenAIGateway.ChatCompletions(c)
+				return
+			}
+			h.Gateway.ChatCompletions(c)
+		})
 	}
 	// OpenAI Chat Completions API（不带v1前缀的别名）— auto-route based on group platform
 	r.POST("/chat/completions", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), compositeTarget, requireGroupAnthropic, func(c *gin.Context) {
