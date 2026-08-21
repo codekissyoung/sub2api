@@ -764,6 +764,38 @@ func buildOpenAIWeightedSelectionOrder(
 		return append([]openAIAccountCandidateScore(nil), candidates...)
 	}
 
+	// 快刷池分档打散：优先级值小的档整体排在前面，加权随机只发生在同档内部。
+	// 若全局打乱，priority 归一化得分会让高档位账号得分趋近 0，在
+	// (maxScore-score)+1 的权重公式下反而比 priority=1 的耗材号更容易被抽中，
+	// 稀释「先刷耗材档、打满才溢出」的设计。
+	tiers := make(map[int][]openAIAccountCandidateScore)
+	priorities := make([]int, 0, 4)
+	for _, candidate := range candidates {
+		priority := 0
+		if candidate.account != nil {
+			priority = candidate.account.Priority
+		}
+		if _, ok := tiers[priority]; !ok {
+			priorities = append(priorities, priority)
+		}
+		tiers[priority] = append(tiers[priority], candidate)
+	}
+	sort.Ints(priorities)
+
+	rng := newOpenAISelectionRNG(deriveOpenAISelectionSeed(req))
+	order := make([]openAIAccountCandidateScore, 0, len(candidates))
+	for _, priority := range priorities {
+		order = append(order, weightedShuffleOpenAITier(tiers[priority], rng)...)
+	}
+	return order
+}
+
+// weightedShuffleOpenAITier 在单个优先级档内做加权随机排序：
+// 低分候选（余量少、更接近周限）抽中权重更大，同时保留随机打散。
+func weightedShuffleOpenAITier(
+	candidates []openAIAccountCandidateScore,
+	rng openAISelectionRNG,
+) []openAIAccountCandidateScore {
 	pool := append([]openAIAccountCandidateScore(nil), candidates...)
 	weights := make([]float64, len(pool))
 	maxScore := pool[0].score
@@ -773,7 +805,6 @@ func buildOpenAIWeightedSelectionOrder(
 		}
 	}
 	for i := range pool {
-		// 低分候选权重更大：同优先级内优先把余量少的号刷到满，同时保留随机打散。
 		weight := (maxScore - pool[i].score) + 1.0
 		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight <= 0 {
 			weight = 1.0
@@ -782,7 +813,6 @@ func buildOpenAIWeightedSelectionOrder(
 	}
 
 	order := make([]openAIAccountCandidateScore, 0, len(pool))
-	rng := newOpenAISelectionRNG(deriveOpenAISelectionSeed(req))
 	for len(pool) > 0 {
 		total := 0.0
 		for _, w := range weights {
