@@ -195,9 +195,11 @@ type CheckMixedChannelRequest struct {
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
 	*dto.Account
-	CurrentConcurrency int                          `json:"current_concurrency"`
-	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
-	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
+	CurrentConcurrency int `json:"current_concurrency"`
+	// Cost30d 该账号最近 30 天 usage_logs.total_cost 合计（美元），无用量为 0
+	Cost30d         float64                      `json:"cost_30d"`
+	SchedulerScore  *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
+	SchedulerScores []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
 	// 以下字段仅对 Anthropic OAuth/SetupToken 账号有效，且仅在启用相应功能时返回
 	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
 	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
@@ -586,6 +588,14 @@ func (h *AccountHandler) List(c *gin.Context) {
 		}
 	}
 
+	// 始终获取最近 30 天费用合计（PostgreSQL 单条批量聚合，走 idx_usage_logs_account_created_at）
+	cost30d := make(map[int64]float64, len(accountIDs))
+	if len(accountIDs) > 0 && h.accountUsageService != nil {
+		if costs, costErr := h.accountUsageService.GetAccountCostsSince(c.Request.Context(), accountIDs, time.Now().AddDate(0, 0, -30)); costErr == nil && costs != nil {
+			cost30d = costs
+		}
+	}
+
 	// 识别需要查询窗口费用、会话数和 RPM 的账号（Anthropic OAuth/SetupToken 且启用了相应功能）
 	windowCostAccountIDs := make([]int64, 0)
 	sessionLimitAccountIDs := make([]int64, 0)
@@ -658,6 +668,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 		item := AccountWithConcurrency{
 			Account:            h.accountResponseFromService(acc),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
+			Cost30d:            cost30d[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
 		}

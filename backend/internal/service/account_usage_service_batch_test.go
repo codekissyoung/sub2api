@@ -49,6 +49,9 @@ func (r *usageBatchLogRepoStub) GetAccountWindowStats(context.Context, int64, ti
 func (r *usageBatchLogRepoStub) GetAccountTodayStats(context.Context, int64) (*usagestats.AccountStats, error) {
 	return &usagestats.AccountStats{}, nil
 }
+func (r *usageBatchLogRepoStub) GetAccountCostsSince(context.Context, []int64, time.Time) (map[int64]float64, error) {
+	return map[int64]float64{}, nil
+}
 func (r *usageBatchLogRepoStub) GetDashboardStats(context.Context) (*usagestats.DashboardStats, error) {
 	return nil, nil
 }

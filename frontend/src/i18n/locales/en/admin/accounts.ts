@@ -206,6 +206,7 @@ export default {
         usageWindows: 'Usage Windows',
         proxy: 'Proxy',
         lastUsed: 'Last Used',
+        cost30d: '30d Cost',
         createdAt: 'Created',
         expiresAt: 'Expires At',
         actions: 'Actions'

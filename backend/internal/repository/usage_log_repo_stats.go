@@ -387,6 +387,44 @@ func (r *usageLogRepository) GetAccountWindowStatsBatch(ctx context.Context, acc
 	return result, nil
 }
 
+// GetAccountCostsSince 批量聚合多个账号在指定起始时间之后的标准费用合计。
+// 返回 map[accountID]total_cost_sum，未命中的账号不会出现在结果中（上层按 0 处理）。
+// 只查询传入的账号 ID，走 idx_usage_logs_account_created_at 索引。
+func (r *usageLogRepository) GetAccountCostsSince(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]float64, error) {
+	result := make(map[int64]float64, len(accountIDs))
+	normalizedAccountIDs := normalizePositiveInt64IDs(accountIDs)
+	if len(normalizedAccountIDs) == 0 {
+		return result, nil
+	}
+
+	query := `
+		SELECT
+			account_id,
+			COALESCE(SUM(total_cost), 0) as cost
+		FROM usage_logs
+		WHERE account_id = ANY($1) AND created_at >= $2
+		GROUP BY account_id
+	`
+	rows, err := r.sql.QueryContext(ctx, query, pq.Array(normalizedAccountIDs), startTime)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var accountID int64
+		var cost float64
+		if err := rows.Scan(&accountID, &cost); err != nil {
+			return nil, err
+		}
+		result[accountID] = cost
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // GetGeminiUsageTotalsBatch 批量聚合 Gemini 账号在窗口内的 Pro/Flash 请求与用量。
 // 模型分类规则与 service.geminiModelClassFromName 一致：model 包含 flash/lite 视为 flash，其余视为 pro。
 func (r *usageLogRepository) GetGeminiUsageTotalsBatch(ctx context.Context, accountIDs []int64, startTime, endTime time.Time) (map[int64]service.GeminiUsageTotals, error) {

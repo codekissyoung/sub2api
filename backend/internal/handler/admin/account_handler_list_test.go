@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -306,4 +307,74 @@ func TestAccountHandlerListSchedulerScoreIgnoresPagination(t *testing.T) {
 	require.Equal(t, int64(301), payload.Data.Items[0].ID)
 	require.Less(t, payload.Data.Items[0].SchedulerScore.BaseScore, 3.75)
 	require.Empty(t, payload.Data.Items[0].SchedulerScores)
+}
+
+// cost30dUsageLogRepoStub 只覆盖 GetAccountCostsSince，其余方法来自内嵌接口（不应被调用）。
+type cost30dUsageLogRepoStub struct {
+	service.UsageLogRepository
+	costs  map[int64]float64
+	gotIDs []int64
+}
+
+func (r *cost30dUsageLogRepoStub) GetAccountCostsSince(_ context.Context, accountIDs []int64, _ time.Time) (map[int64]float64, error) {
+	r.gotIDs = append([]int64(nil), accountIDs...)
+	return r.costs, nil
+}
+
+func TestAccountHandlerListIncludesCost30d(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	adminSvc := newStubAdminService()
+	now := time.Now().UTC()
+	adminSvc.accounts = []service.Account{
+		{
+			ID:          401,
+			Name:        "account-with-cost",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		{
+			ID:          402,
+			Name:        "account-no-usage",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	}
+	usageRepo := &cost30dUsageLogRepoStub{costs: map[int64]float64{401: 123.45}}
+	accountUsageSvc := service.NewAccountUsageService(nil, usageRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, accountUsageSvc, nil, nil, nil, nil, nil, nil)
+	router.GET("/api/v1/admin/accounts", handler.List)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?page=1&page_size=20", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	// 批量查询只应覆盖当前页账号
+	require.ElementsMatch(t, []int64{401, 402}, usageRepo.gotIDs)
+
+	var payload struct {
+		Data struct {
+			Items []struct {
+				ID      int64   `json:"id"`
+				Cost30d float64 `json:"cost_30d"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Len(t, payload.Data.Items, 2)
+	costByID := make(map[int64]float64, 2)
+	for _, item := range payload.Data.Items {
+		costByID[item.ID] = item.Cost30d
+	}
+	require.InEpsilon(t, 123.45, costByID[401], 1e-9)
+	require.Zero(t, costByID[402], "无用量账号应返回 0")
 }

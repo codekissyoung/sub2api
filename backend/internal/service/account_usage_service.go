@@ -42,6 +42,7 @@ type UsageLogRepository interface {
 
 	GetAccountWindowStats(ctx context.Context, accountID int64, startTime time.Time) (*usagestats.AccountStats, error)
 	GetAccountTodayStats(ctx context.Context, accountID int64) (*usagestats.AccountStats, error)
+	GetAccountCostsSince(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]float64, error)
 
 	// Admin dashboard stats
 	GetDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error)
@@ -1790,4 +1791,10 @@ func buildGeminiUsageProgress(used, limit int64, resetAt time.Time, tokens int64
 // 用于账号列表页面显示当前窗口费用
 func (s *AccountUsageService) GetAccountWindowStats(ctx context.Context, accountID int64, startTime time.Time) (*usagestats.AccountStats, error) {
 	return s.usageLogRepo.GetAccountWindowStats(ctx, accountID, startTime)
+}
+
+// GetAccountCostsSince 批量获取多个账号在指定起始时间之后的标准费用合计
+// 用于账号列表页面显示 30 天费用；未命中的账号按 0 处理
+func (s *AccountUsageService) GetAccountCostsSince(ctx context.Context, accountIDs []int64, startTime time.Time) (map[int64]float64, error) {
+	return s.usageLogRepo.GetAccountCostsSince(ctx, accountIDs, startTime)
 }

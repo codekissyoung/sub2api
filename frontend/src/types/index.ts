@@ -1140,6 +1140,7 @@ export interface Account {
   concurrency: number
   load_factor?: number | null
   current_concurrency?: number // Real-time concurrency count from Redis
+  cost_30d?: number // 最近 30 天 usage_logs.total_cost 合计（美元），无用量为 0
   scheduler_score?: {
     base_score: number
     sticky_score?: number

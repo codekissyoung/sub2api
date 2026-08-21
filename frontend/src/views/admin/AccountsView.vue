@@ -373,6 +373,14 @@
             </div>
             <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
+          <template #cell-cost_30d="{ row }">
+            <span
+              class="text-sm"
+              :class="(row.cost_30d ?? 0) > 840
+                ? 'font-medium text-emerald-600 dark:text-emerald-400'
+                : 'text-gray-700 dark:text-gray-300'"
+            >${{ (row.cost_30d ?? 0).toFixed(2) }}</span>
+          </template>
           <template #cell-last_used_at="{ value }">
             <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatRelativeTime(value) }}</span>
           </template>
@@ -1600,6 +1608,7 @@ const allColumns = computed(() => {
     { key: 'proxy', label: t('admin.accounts.columns.proxy'), sortable: false },
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
+    { key: 'cost_30d', label: t('admin.accounts.columns.cost30d'), sortable: false },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
     { key: 'upstream_billing_rate', label: t('admin.accounts.columns.upstreamBillingRate'), sortable: true },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
