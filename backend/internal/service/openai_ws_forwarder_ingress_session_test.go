@@ -4419,3 +4419,275 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_ClientDisconnect
 		t.Fatal("未收到断连后的 turn 结果回调")
 	}
 }
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PromptCacheRetentionStripping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	run := func(t *testing.T, account *Account) *openAIWSCaptureConn {
+		t.Helper()
+
+		cfg := &config.Config{}
+		cfg.Security.URLAllowlist.Enabled = false
+		cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+		cfg.Gateway.OpenAIWS.Enabled = true
+		cfg.Gateway.OpenAIWS.OAuthEnabled = true
+		cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+		cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+		cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+		cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+		cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+		cfg.Gateway.OpenAIWS.QueueLimitPerConn = 8
+		cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+		cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+		cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+		captureConn := &openAIWSCaptureConn{
+			events: [][]byte{
+				[]byte(`{"type":"response.completed","response":{"id":"resp_pcr_turn_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			},
+		}
+		captureDialer := &openAIWSCaptureDialer{conn: captureConn}
+		pool := newOpenAIWSConnPool(cfg)
+		pool.setClientDialerForTest(captureDialer)
+
+		svc := &OpenAIGatewayService{
+			cfg:              cfg,
+			httpUpstream:     &httpUpstreamRecorder{},
+			cache:            &stubGatewayCache{},
+			openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+			toolCorrector:    NewCodexToolCorrector(),
+			openaiWSPool:     pool,
+		}
+
+		serverErrCh := make(chan error, 1)
+		wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{
+				CompressionMode: coderws.CompressionContextTakeover,
+			})
+			if err != nil {
+				serverErrCh <- err
+				return
+			}
+			defer func() {
+				_ = conn.CloseNow()
+			}()
+
+			rec := httptest.NewRecorder()
+			ginCtx, _ := gin.CreateTestContext(rec)
+			req := r.Clone(r.Context())
+			req.Header = req.Header.Clone()
+			req.Header.Set("User-Agent", "codex_cli_rs/0.147.0")
+			ginCtx.Request = req
+
+			readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			msgType, firstMessage, readErr := conn.Read(readCtx)
+			cancel()
+			if readErr != nil {
+				serverErrCh <- readErr
+				return
+			}
+			if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+				serverErrCh <- errors.New("unsupported websocket client message type")
+				return
+			}
+
+			serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "test-token", firstMessage, nil)
+		}))
+		defer wsServer.Close()
+
+		dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+		clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+		cancelDial()
+		require.NoError(t, err)
+		defer func() {
+			_ = clientConn.CloseNow()
+		}()
+
+		writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+		err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false,"prompt_cache_retention":"24h","input":"hi"}`))
+		cancelWrite()
+		require.NoError(t, err)
+
+		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+		msgType, message, err := clientConn.Read(readCtx)
+		cancelRead()
+		require.NoError(t, err)
+		require.Equal(t, coderws.MessageText, msgType)
+		require.Equal(t, "resp_pcr_turn_1", gjson.GetBytes(message, "response.id").String())
+
+		_ = clientConn.Close(coderws.StatusNormalClosure, "done")
+
+		select {
+		case serverErr := <-serverErrCh:
+			require.NoError(t, serverErr)
+		case <-time.After(5 * time.Second):
+			t.Fatal("等待 ingress websocket 结束超时")
+		}
+		return captureConn
+	}
+
+	t.Run("oauth account strips prompt_cache_retention", func(t *testing.T) {
+		account := &Account{
+			ID:          211,
+			Name:        "openai-oauth-pcr-strip",
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Credentials: map[string]any{
+				"access_token": "test-token",
+			},
+			Extra: map[string]any{
+				"openai_oauth_responses_websockets_v2_enabled": true,
+			},
+		}
+		captureConn := run(t, account)
+		require.Len(t, captureConn.writes, 1)
+		payload := requestToJSONString(captureConn.writes[0])
+		require.False(t, gjson.Get(payload, "prompt_cache_retention").Exists(),
+			"OAuth codex 上游不认 prompt_cache_retention，WS ingress 必须剥离")
+		require.Equal(t, "hi", gjson.Get(payload, "input").String())
+	})
+
+	t.Run("apikey account preserves prompt_cache_retention", func(t *testing.T) {
+		account := &Account{
+			ID:          212,
+			Name:        "openai-apikey-pcr-keep",
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Credentials: map[string]any{
+				"api_key": "sk-test",
+			},
+			Extra: map[string]any{
+				"responses_websockets_v2_enabled": true,
+			},
+		}
+		captureConn := run(t, account)
+		require.Len(t, captureConn.writes, 1)
+		payload := requestToJSONString(captureConn.writes[0])
+		require.Equal(t, "24h", gjson.Get(payload, "prompt_cache_retention").String(),
+			"API key 路径不动，prompt_cache_retention 应原样保留")
+	})
+}
+
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughStripsPromptCacheRetention(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+	cfg.Gateway.OpenAIWS.IngressModeDefault = OpenAIWSIngressModeCtxPool
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+
+	upstreamConn := &openAIWSCaptureConn{
+		events: [][]byte{
+			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_pcr","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+		},
+	}
+	captureDialer := &openAIWSCaptureDialer{conn: upstreamConn}
+	svc := &OpenAIGatewayService{
+		cfg:                       cfg,
+		httpUpstream:              &httpUpstreamRecorder{},
+		cache:                     &stubGatewayCache{},
+		openaiWSResolver:          NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:             NewCodexToolCorrector(),
+		openaiWSPassthroughDialer: captureDialer,
+	}
+	account := &Account{
+		ID:          454,
+		Name:        "openai-ingress-passthrough-pcr",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "oauth-token",
+		},
+		Extra: map[string]any{
+			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,
+		},
+	}
+
+	serverErrCh := make(chan error, 1)
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := coderws.Accept(w, r, &coderws.AcceptOptions{
+			CompressionMode: coderws.CompressionContextTakeover,
+		})
+		if err != nil {
+			serverErrCh <- err
+			return
+		}
+		defer func() {
+			_ = conn.CloseNow()
+		}()
+
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+		req := r.Clone(r.Context())
+		req.Header = req.Header.Clone()
+		req.Header.Set("User-Agent", "codex_cli_rs/0.147.0")
+		ginCtx.Request = req
+
+		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+		msgType, firstMessage, readErr := conn.Read(readCtx)
+		cancel()
+		if readErr != nil {
+			serverErrCh <- readErr
+			return
+		}
+		if msgType != coderws.MessageText && msgType != coderws.MessageBinary {
+			serverErrCh <- errors.New("unsupported websocket client message type")
+			return
+		}
+
+		serverErrCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "oauth-token", firstMessage, nil)
+	}))
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http"), nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() {
+		_ = clientConn.CloseNow()
+	}()
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","stream":false,"prompt_cache_retention":"24h","input":"hi"}`))
+	cancelWrite()
+	require.NoError(t, err)
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	_, event, readErr := clientConn.Read(readCtx)
+	cancelRead()
+	require.NoError(t, readErr)
+	require.Equal(t, "resp_passthrough_pcr", gjson.GetBytes(event, "response.id").String())
+	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
+
+	select {
+	case serverErr := <-serverErrCh:
+		if serverErr != nil {
+			require.Contains(t, serverErr.Error(), "StatusNormalClosure")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("等待 passthrough websocket 结束超时")
+	}
+
+	require.Len(t, upstreamConn.writes, 1)
+	forwarded := requestToJSONString(upstreamConn.writes[0])
+	require.False(t, gjson.Get(forwarded, "prompt_cache_retention").Exists(),
+		"passthrough 转发帧不应携带 prompt_cache_retention")
+	require.Equal(t, "hi", gjson.Get(forwarded, "input").String())
+}

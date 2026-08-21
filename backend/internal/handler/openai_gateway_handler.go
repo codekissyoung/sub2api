@@ -329,6 +329,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
+	// 为上游报错抓包（openai_error_capture_request_enabled）保留客户端原始请求体
+	// 引用；零拷贝，正常路径不读取。
+	c.Set(opsRequestBodyCaptureKey, body)
+
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
 	body, ok = h.normalizeOpenAIResponsesCompactRequest(c, reqLog, body)

@@ -315,6 +315,23 @@ func shouldForceNewConnOnStoreDisabled(mode, lastFailureReason string) bool {
 	}
 }
 
+// stripOpenAIOAuthWSResponseCreateUnsupportedFields 剥离转发到 ChatGPT
+// backend-api（OpenAI OAuth codex 账号）的 response.create payload 中上游不认识的
+// 顶层字段。codex 0.147+ 客户端会携带 prompt_cache_retention，chatgpt 后端返回
+// 400 "prompt_cache_retention is not supported on this model"。
+// HTTP 链路分别在 normalizeOpenAIPassthroughOAuthBody / applyCodexOAuthTransform
+// 中剥离；WS 链路（ctx_pool/dedicated ingress、http_bridge、passthrough relay）
+// 转发的是客户端原始 payload，统一在此剥离。API key 账号路径保留不动。
+func stripOpenAIOAuthWSResponseCreateUnsupportedFields(account *Account, payload []byte) ([]byte, error) {
+	if account == nil || !account.IsOpenAIOAuth() || len(payload) == 0 {
+		return payload, nil
+	}
+	if !gjson.GetBytes(payload, "prompt_cache_retention").Exists() {
+		return payload, nil
+	}
+	return sjson.DeleteBytes(payload, "prompt_cache_retention")
+}
+
 func dropPreviousResponseIDFromRawPayload(payload []byte) ([]byte, bool, error) {
 	return dropPreviousResponseIDFromRawPayloadWithDeleteFn(payload, sjson.DeleteBytes)
 }

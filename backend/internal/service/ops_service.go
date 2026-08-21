@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"golang.org/x/sync/singleflight"
 )
 
 var ErrOpsDisabled = infraerrors.NotFound("OPS_DISABLED", "Ops monitoring is disabled")
@@ -76,6 +77,11 @@ type OpsService struct {
 	// only serializes startup and administrative updates.
 	runtimeSettings   atomic.Pointer[opsRuntimeSettingsSnapshot]
 	runtimeSettingsMu sync.Mutex
+
+	// errorCaptureRequestCache 缓存 openai_error_capture_request_enabled 开关
+	// （*cachedOpsErrorCaptureRequestEnabled），避免错误路径每次查 settings 表。
+	errorCaptureRequestCache atomic.Value
+	errorCaptureRequestSF    singleflight.Group
 
 	runtimeRefreshMu             sync.Mutex
 	runtimeRefreshCancel         context.CancelFunc

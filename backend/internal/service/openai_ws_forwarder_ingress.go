@@ -255,6 +255,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			normalized = next
 		}
+		// OAuth codex 账号（chatgpt backend-api）剥离上游不认识的字段，
+		// 详见 stripOpenAIOAuthWSResponseCreateUnsupportedFields。
+		if stripped, stripErr := stripOpenAIOAuthWSResponseCreateUnsupportedFields(account, normalized); stripErr != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)
+		} else {
+			normalized = stripped
+		}
 		if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(normalized) {
 			litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(normalized)
 			if liteErr != nil {

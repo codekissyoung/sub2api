@@ -101,6 +101,11 @@ type OpsInsertErrorLogInput struct {
 	ErrorSource string
 	ErrorOwner  string
 
+	// RequestHeaders / RequestBody 是上游报错抓包快照（脱敏 headers JSON + 截断 body），
+	// 仅在 openai_error_capture_request_enabled 开关打开时由错误路径填充；为空即未抓包。
+	RequestHeaders string
+	RequestBody    string
+
 	UpstreamStatusCode   *int
 	UpstreamErrorMessage *string
 	UpstreamErrorDetail  *string

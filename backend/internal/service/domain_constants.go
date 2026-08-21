@@ -431,6 +431,11 @@ const (
 	// SettingKeyOpsMonitoringEnabled is a DB-backed soft switch to enable/disable ops module at runtime.
 	SettingKeyOpsMonitoringEnabled = "ops_monitoring_enabled"
 
+	// SettingKeyOpenAIErrorCaptureRequestEnabled 是上游报错抓包开关（默认关）。
+	// 打开后，上游错误路径会把脱敏后的客户端请求 headers 与截断的 request body
+	// 落入 ops_error_logs.request_headers / request_body。
+	SettingKeyOpenAIErrorCaptureRequestEnabled = "openai_error_capture_request_enabled"
+
 	// SettingKeyOpsRealtimeMonitoringEnabled controls realtime features (e.g. WS/QPS push).
 	SettingKeyOpsRealtimeMonitoringEnabled = "ops_realtime_monitoring_enabled"
 

@@ -681,6 +681,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		}
 		firstClientMessage = liteFirstMessage
 	}
+	// OAuth codex 账号剥离上游不认识的字段（prompt_cache_retention 等），
+	// 与 WS ingress parseClientPayload 同一规则。
+	if stripped, stripErr := stripOpenAIOAuthWSResponseCreateUnsupportedFields(account, firstClientMessage); stripErr != nil {
+		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)
+	} else {
+		firstClientMessage = stripped
+	}
 	if hooks != nil && (hooks.MaxReasoningEffort != "" || len(hooks.ReasoningEffortMappings) > 0) {
 		if capped, changed := ApplyOpenAIReasoningEffortPolicy(firstClientMessage, hooks.MaxReasoningEffort, hooks.ReasoningEffortMappings); changed {
 			firstClientMessage = capped
@@ -963,6 +970,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
 					}
 					payload = litePayload
+				}
+				// 与首帧一致：OAuth codex 账号剥离上游不认识的字段。
+				if stripped, stripErr := stripOpenAIOAuthWSResponseCreateUnsupportedFields(account, payload); stripErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", stripErr)
+				} else {
+					payload = stripped
 				}
 				if hooks != nil && (hooks.MaxReasoningEffort != "" || len(hooks.ReasoningEffortMappings) > 0) {
 					if capped, changed := ApplyOpenAIReasoningEffortPolicy(payload, hooks.MaxReasoningEffort, hooks.ReasoningEffortMappings); changed {

@@ -34,6 +34,10 @@ const (
 	opsUpstreamModelKey = "ops_upstream_model"
 	opsRequestTypeKey   = "ops_request_type"
 
+	// opsRequestBodyCaptureKey 存放客户端原始请求体（[]byte 引用，零拷贝），
+	// 由 Responses handler 在读取 body 后写入；仅错误抓包路径读取。
+	opsRequestBodyCaptureKey = "ops_request_body_capture"
+
 	// 错误过滤匹配常量 — shouldSkipOpsErrorLog 和错误分类共用
 	opsErrContextCanceled            = "context canceled"
 	opsErrNoAvailableAccounts        = "no available accounts"
@@ -220,6 +224,13 @@ func enqueueOpsErrorLog(ops *service.OpsService, entry *service.OpsInsertErrorLo
 			opsErrorLogSanitized.Add(1)
 		}
 	}
+	// 抓包字段兜底截断（正常已在采集点截到 16KB/8KB，这里防止未来调用方绕过）。
+	if entry.RequestHeaders != "" {
+		entry.RequestHeaders = truncateString(entry.RequestHeaders, service.OpsErrorCaptureBodyMaxBytes)
+	}
+	if entry.RequestBody != "" {
+		entry.RequestBody = truncateString(entry.RequestBody, service.OpsErrorCaptureBodyMaxBytes)
+	}
 	if err := service.SanitizeOpsUpstreamErrorsForQueue(entry); err != nil {
 		opsErrorLogDropped.Add(1)
 		maybeLogOpsErrorLogDrop()
@@ -405,7 +416,8 @@ func estimateOpsErrorLogJobBytes(entry *service.OpsInsertErrorLogInput) int64 {
 		len(entry.RequestedModel) + len(entry.UpstreamModel) + len(entry.UserAgent) +
 		len(entry.ErrorPhase) + len(entry.ErrorType) + len(entry.Severity) +
 		len(entry.ErrorMessage) + len(entry.ErrorBody) + len(entry.ErrorSource) +
-		len(entry.ErrorOwner) + len(entry.APIKeyPrefix)
+		len(entry.ErrorOwner) + len(entry.APIKeyPrefix) +
+		len(entry.RequestHeaders) + len(entry.RequestBody)
 	if entry.UpstreamErrorMessage != nil {
 		size += len(*entry.UpstreamErrorMessage)
 	}
@@ -514,6 +526,41 @@ func isOpsNoAvailableAccountError(err error) bool {
 		return true
 	}
 	return isOpsNoAvailableAccountMessage(err.Error())
+}
+
+// applyOpsErrorRequestCapture 在上游报错抓包开关
+// （openai_error_capture_request_enabled，默认关）打开时，把脱敏后的客户端请求
+// headers 与截断的 request body 挂到错误日志 entry 上。
+//
+// 只在上游相关错误上抓包：上游 4xx/429/5xx（含被 failover 盖住的尝试）或
+// includeStreamError=true 的已固化 200 流就地错误；本地校验/鉴权类错误不抓。
+// 开关关闭时零行为变化。
+func applyOpsErrorRequestCapture(c *gin.Context, ops *service.OpsService, entry *service.OpsInsertErrorLogInput, includeStreamError bool) {
+	if c == nil || ops == nil || entry == nil {
+		return
+	}
+	hasUpstreamContext := entry.UpstreamStatusCode != nil ||
+		len(entry.UpstreamErrors) > 0 ||
+		(entry.UpstreamErrorMessage != nil && strings.TrimSpace(*entry.UpstreamErrorMessage) != "") ||
+		(entry.UpstreamErrorDetail != nil && strings.TrimSpace(*entry.UpstreamErrorDetail) != "")
+	if !hasUpstreamContext && !includeStreamError {
+		return
+	}
+	ctx := context.Background()
+	if c.Request != nil {
+		ctx = c.Request.Context()
+	}
+	if !ops.IsOpenAIErrorCaptureRequestEnabled(ctx) {
+		return
+	}
+	if c.Request != nil {
+		entry.RequestHeaders = service.SanitizeOpsErrorCaptureHeaders(c.Request.Header)
+	}
+	if v, ok := c.Get(opsRequestBodyCaptureKey); ok {
+		if body, ok := v.([]byte); ok {
+			entry.RequestBody = service.TruncateOpsErrorCaptureBody(body)
+		}
+	}
 }
 
 type opsCaptureWriter struct {
@@ -957,6 +1004,8 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				entry.ClientIP = &clientIP
 			}
 
+			applyOpsErrorRequestCapture(c, ops, entry, false)
+
 			// Skip logging if a passthrough rule with skip_monitoring=true matched.
 			if v, ok := c.Get(service.OpsSkipPassthroughKey); ok {
 				if skip, _ := v.(bool); skip {
@@ -1096,6 +1145,8 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			clientIP = ip
 			entry.ClientIP = &clientIP
 		}
+
+		applyOpsErrorRequestCapture(c, ops, entry, false)
 
 		enqueueOpsErrorLog(ops, entry)
 	}
@@ -1241,6 +1292,9 @@ func logOpsStreamError(c *gin.Context, ops *service.OpsService, wireStatus int) 
 	if clientIP := strings.TrimSpace(ip.GetClientIP(c)); clientIP != "" {
 		entry.ClientIP = &clientIP
 	}
+
+	// 就地 SSE 错误即「流中断」场景，纳入抓包范围。
+	applyOpsErrorRequestCapture(c, ops, entry, true)
 
 	enqueueOpsErrorLog(ops, entry)
 }
