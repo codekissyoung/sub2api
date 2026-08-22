@@ -480,6 +480,26 @@ func TestOpenAIForwardMayFailover_JSONKeepaliveSemanticWriteBlocksFailover(t *te
 		"semantic JSON output after heartbeat must block failover")
 }
 
+// chat completions 的 failover 判定与 /responses 共用同一扣除心跳口径：
+// 仅心跳写出时 Size 不变（可继续换号），语义写出后 Size 变化（不可换号）。
+func TestChatCompletionsFailoverCheck_JSONKeepaliveHeartbeatsExcluded(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointChatCompletions, nil)
+
+	stop := service.StartOpenAIImagesJSONKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	before := service.OpenAIForwardAdjustedWrittenSize(c)
+	require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+	require.Equal(t, before, service.OpenAIForwardAdjustedWrittenSize(c),
+		"heartbeat padding alone must not count as a written response")
+
+	c.JSON(http.StatusOK, gin.H{"choices": []gin.H{{"index": 0}}})
+	require.NotEqual(t, before, service.OpenAIForwardAdjustedWrittenSize(c),
+		"semantic JSON output must count as a written response")
+}
+
 func TestOpenAIErrorResponse_JSONKeepaliveCommittedWritesSingleJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

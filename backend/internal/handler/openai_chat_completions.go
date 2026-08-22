@@ -152,6 +152,17 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 	ccPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(ccPricingCtx)
 
+	// 非流式 chat completions 与 /responses 同坑：上游等待期间客户端收不到
+	// 响应头，外层中继首字节预算会把正常长生成掐掉；用 JSON 空白心跳保活。
+	jsonNonstreamKeepaliveEligible := !reqStream
+	jsonKeepaliveStarted := false
+	var stopJSONKeepalive func()
+	defer func() {
+		if stopJSONKeepalive != nil {
+			stopJSONKeepalive()
+		}
+	}()
+
 	for {
 		if failoverClientGone(c) {
 			return
@@ -224,13 +235,19 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+		if jsonNonstreamKeepaliveEligible && !jsonKeepaliveStarted {
+			stopJSONKeepalive = service.StartOpenAIImagesJSONKeepalive(c, h.openAIChatNonstreamKeepaliveInterval())
+			jsonKeepaliveStarted = true
+		}
 		forwardStart := time.Now()
 
 		forwardBody := body
 		if channelMapping.Mapped {
 			forwardBody = h.gatewayService.ReplaceModelInBody(body, channelMapping.MappedModel)
 		}
-		writerSizeBeforeForward := c.Writer.Size()
+		// 扣除心跳填充字节的统一口径：心跳不构成语义响应，不能因心跳
+		// 字节变化而放弃 failover 换号（#3887）。
+		writerSizeBeforeForward := service.OpenAIForwardAdjustedWrittenSize(c)
 		result, err := func() (*service.OpenAIForwardResult, error) {
 			defer func() {
 				if accountReleaseFunc != nil {
@@ -246,6 +263,13 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockKeyChat, clientRequestedUsageFields(c, channelMapping, reqModel, ""), service.HashUsageRequestPayload(body))
 
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
+		if jsonKeepaliveStarted && service.OpenAIImagesJSONKeepaliveCommitted(c) {
+			reqLog.Info("openai.chat_nonstream_json_keepalive_committed",
+				zap.Int64("account_id", account.ID),
+				zap.Int64("forward_duration_ms", forwardDurationMs),
+				zap.Bool("forward_error", err != nil),
+			)
+		}
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -314,7 +338,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						)
 						return
 					}
-					if c.Writer.Size() != writerSizeBeforeForward {
+					if service.OpenAIForwardAdjustedWrittenSize(c) != writerSizeBeforeForward {
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}

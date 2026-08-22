@@ -2977,6 +2977,15 @@ func (h *OpenAIGatewayHandler) openAIResponsesJSONKeepaliveInterval() time.Durat
 	return time.Duration(h.cfg.Gateway.ResponsesNonstreamKeepaliveInterval) * time.Second
 }
 
+// openAIChatNonstreamKeepaliveInterval 非流式 /chat/completions 的 JSON 空白
+// 心跳间隔；0 表示禁用。
+func (h *OpenAIGatewayHandler) openAIChatNonstreamKeepaliveInterval() time.Duration {
+	if h.cfg == nil || h.cfg.Gateway.ChatNonstreamKeepaliveInterval <= 0 {
+		return 0
+	}
+	return time.Duration(h.cfg.Gateway.ChatNonstreamKeepaliveInterval) * time.Second
+}
+
 func setOpenAIClientTransportHTTP(c *gin.Context) {
 	service.SetOpenAIClientTransport(c, service.OpenAIClientTransportHTTP)
 }

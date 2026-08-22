@@ -655,6 +655,15 @@ func TestLoadResponsesNonstreamKeepaliveFromEnv(t *testing.T) {
 	require.Equal(t, 15, cfg.Gateway.ResponsesNonstreamKeepaliveInterval)
 }
 
+func TestLoadChatNonstreamKeepaliveFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_CHAT_NONSTREAM_KEEPALIVE_INTERVAL", "15")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 15, cfg.Gateway.ChatNonstreamKeepaliveInterval)
+}
+
 func TestLoadOpenAIWSStickyTTLCompatibility(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_WS_STICKY_RESPONSE_ID_TTL_SECONDS", "0")
@@ -1949,6 +1958,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.responses_nonstream_keepalive_interval must be non-negative",
 		},
 		{
+			name:    "gateway chat nonstream keepalive range",
+			mutate:  func(c *Config) { c.Gateway.ChatNonstreamKeepaliveInterval = 4 },
+			wantErr: "gateway.chat_nonstream_keepalive_interval",
+		},
+		{
+			name:    "gateway chat nonstream keepalive negative",
+			mutate:  func(c *Config) { c.Gateway.ChatNonstreamKeepaliveInterval = -1 },
+			wantErr: "gateway.chat_nonstream_keepalive_interval must be non-negative",
+		},
+		{
 			name:    "gateway image stream data interval range",
 			mutate:  func(c *Config) { c.Gateway.ImageStreamDataIntervalTimeout = 30 },
 			wantErr: "gateway.image_stream_data_interval_timeout",
@@ -2591,6 +2610,9 @@ func TestLoad_DefaultGatewayImageStreamConfig(t *testing.T) {
 	}
 	if cfg.Gateway.ResponsesNonstreamKeepaliveInterval != 0 {
 		t.Fatalf("responses_nonstream_keepalive_interval = %d, want 0", cfg.Gateway.ResponsesNonstreamKeepaliveInterval)
+	}
+	if cfg.Gateway.ChatNonstreamKeepaliveInterval != 0 {
+		t.Fatalf("chat_nonstream_keepalive_interval = %d, want 0", cfg.Gateway.ChatNonstreamKeepaliveInterval)
 	}
 	if cfg.Gateway.ImageConcurrency.Enabled {
 		t.Fatalf("image_concurrency.enabled = true, want false")
