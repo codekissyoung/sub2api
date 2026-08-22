@@ -359,6 +359,10 @@ type openAIStickyEscapeConfig struct {
 	errorRate float64
 }
 
+// openAIDegradedCandidateWeightFactor 退化账号在同档加权随机中的权重折扣。
+// 取小但非零的值：fresh 请求基本绕开退化账号，同时保留少量恢复样本流量。
+const openAIDegradedCandidateWeightFactor = 0.05
+
 func newDefaultOpenAIAccountScheduler(service *OpenAIGatewayService, stats *openAIAccountRuntimeStats) OpenAIAccountScheduler {
 	if stats == nil {
 		stats = newOpenAIAccountRuntimeStats()
@@ -615,6 +619,11 @@ type openAIAccountCandidateScore struct {
 	errorRate float64
 	ttft      float64
 	hasTTFT   bool
+	// degraded 标记运行时指标越过 sticky escape 阈值的账号（TTFT 退化或错误率
+	// 过高）。无粘性会话没有 escape 保护，会在「同档低分先刷」下反复命中最差
+	// 账号；degraded 候选在同优先级档内排到健康候选之后、 shuffle 权重打折，
+	// 但不被剔除——保留小流量以便恢复样本回流后自动解除。
+	degraded bool
 }
 
 type openAIAccountCandidateHeap []openAIAccountCandidateScore
@@ -653,6 +662,11 @@ func isOpenAIAccountCandidateBetter(left openAIAccountCandidateScore, right open
 	// 低分 = 余量少/接近周限的共享号，要抢在其他共享者之前先刷完。
 	if left.account.Priority != right.account.Priority {
 		return left.account.Priority < right.account.Priority
+	}
+	// 运行时退化（TTFT/错误率越阈）的候选在同档内排最后，避免无粘性会话
+	// 反复命中正在退化的首选账号；候选仍留在池内参与加权随机。
+	if left.degraded != right.degraded {
+		return !left.degraded
 	}
 	if left.score != right.score {
 		return left.score < right.score
@@ -809,6 +823,11 @@ func weightedShuffleOpenAITier(
 		if math.IsNaN(weight) || math.IsInf(weight, 0) || weight <= 0 {
 			weight = 1.0
 		}
+		if pool[i].degraded {
+			// 退化账号权重打折：不剔除（保留恢复样本流量），但显著降低
+			// 被无粘性请求抽中的概率。
+			weight *= openAIDegradedCandidateWeightFactor
+		}
 		weights[i] = weight
 	}
 
@@ -847,6 +866,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 	filtered []*Account,
 	loadMap map[int64]*AccountLoadInfo,
 ) openAIAccountLoadPlan {
+	escapeCfg := s.service.openAIStickyEscapeConfig()
 	allCandidates := make([]openAIAccountCandidateScore, 0, len(filtered))
 	for _, account := range filtered {
 		loadInfo, loadKnown := loadMap[account.ID]
@@ -858,6 +878,8 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		if s.stats != nil {
 			errorRate, ttft, hasTTFT = s.stats.snapshot(account.ID)
 		}
+		degraded := escapeCfg.enabled &&
+			((hasTTFT && ttft > escapeCfg.ttftMs) || errorRate > escapeCfg.errorRate)
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
 			account:   account,
 			loadInfo:  loadInfo,
@@ -865,6 +887,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 			errorRate: errorRate,
 			ttft:      ttft,
 			hasTTFT:   hasTTFT,
+			degraded:  degraded,
 		})
 	}
 

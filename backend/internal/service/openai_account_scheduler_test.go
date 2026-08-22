@@ -2692,6 +2692,66 @@ func TestReportOpenAIAccountScheduleResult_SuccessClearsModelTransientState(t *t
 	require.False(t, svc.openaiModelTransient.isBlocked(21636, "gpt-5.5", now.Add(2*time.Millisecond)))
 }
 
+func TestIsOpenAIAccountCandidateBetter_DegradedSortsLastWithinPriority(t *testing.T) {
+	load := &AccountLoadInfo{}
+	healthy := openAIAccountCandidateScore{account: &Account{ID: 1, Priority: 0}, loadInfo: load, score: 0.4}
+	degraded := openAIAccountCandidateScore{account: &Account{ID: 2, Priority: 0}, loadInfo: load, score: 0.0, degraded: true}
+
+	// 退化账号即使得分更低（更接近周限、本应先刷）也排在同档健康账号之后。
+	require.True(t, isOpenAIAccountCandidateBetter(healthy, degraded))
+	require.False(t, isOpenAIAccountCandidateBetter(degraded, healthy))
+
+	// degraded 不跨优先级档：高优先级退化账号仍先于低优先级健康账号。
+	degradedHighPriority := openAIAccountCandidateScore{account: &Account{ID: 3, Priority: -1}, loadInfo: load, degraded: true}
+	require.True(t, isOpenAIAccountCandidateBetter(degradedHighPriority, healthy))
+
+	// 同为退化时维持低分优先。
+	anotherDegraded := openAIAccountCandidateScore{account: &Account{ID: 4, Priority: 0}, loadInfo: load, score: 0.5, degraded: true}
+	require.True(t, isOpenAIAccountCandidateBetter(degraded, anotherDegraded))
+}
+
+func TestWeightedShuffleOpenAITier_DegradedWeightDiscounted(t *testing.T) {
+	// 生产同档得分差通常 <1：退化账号原权重略高于健康账号，0.05 折扣后
+	// 首抽中率应从 ~60% 降到个位数，但保持非零以回流恢复样本。
+	firstPicks := 0
+	const trials = 4000
+	for i := 0; i < trials; i++ {
+		rng := newOpenAISelectionRNG(uint64(i + 1))
+		order := weightedShuffleOpenAITier([]openAIAccountCandidateScore{
+			{account: &Account{ID: 1}, loadInfo: &AccountLoadInfo{}, score: 0.5},
+			{account: &Account{ID: 2}, loadInfo: &AccountLoadInfo{}, score: 0.0, degraded: true},
+		}, rng)
+		if order[0].account.ID == 2 {
+			firstPicks++
+		}
+	}
+	rate := float64(firstPicks) / trials
+	require.Less(t, rate, 0.20, "degraded candidate should rarely be picked first, got %.3f", rate)
+	require.Greater(t, rate, 0.005, "degraded candidate must retain nonzero traffic for recovery, got %.3f", rate)
+}
+
+func TestBuildOpenAIAccountLoadPlan_MarksDegradedFromRuntimeStats(t *testing.T) {
+	stats := newOpenAIAccountRuntimeStats()
+	slowTTFT := 30000
+	for i := 0; i < 8; i++ {
+		stats.report(201, true, &slowTTFT)
+	}
+	fastTTFT := 1000
+	for i := 0; i < 3; i++ {
+		stats.report(202, true, &fastTTFT)
+	}
+	scheduler := &defaultOpenAIAccountScheduler{stats: stats}
+
+	plan := scheduler.buildOpenAIAccountLoadPlan(context.Background(), OpenAIAccountScheduleRequest{}, []*Account{{ID: 201}, {ID: 202}}, nil)
+
+	degradedByID := make(map[int64]bool, len(plan.allCandidates))
+	for _, candidate := range plan.allCandidates {
+		degradedByID[candidate.account.ID] = candidate.degraded
+	}
+	require.True(t, degradedByID[201], "ttft EWMA 30s 超过默认 15s 阈值应标记退化")
+	require.False(t, degradedByID[202], "ttft EWMA 1s 不应标记退化")
+}
+
 func TestDefaultOpenAIAccountScheduler_ShouldEscapeStickyAccount_ThresholdBoundary(t *testing.T) {
 	stats := newOpenAIAccountRuntimeStats()
 	accountID := int64(21501)
@@ -2700,7 +2760,6 @@ func TestDefaultOpenAIAccountScheduler_ShouldEscapeStickyAccount_ThresholdBounda
 	stats.report(accountID, false, nil)
 	stats.report(accountID, true, nil)
 	scheduler := &defaultOpenAIAccountScheduler{stats: stats}
-
 	reason, errorRate, observedTTFT, shouldEscape := scheduler.shouldEscapeStickyAccount(accountID, openAIStickyEscapeConfig{
 		enabled:   true,
 		ttftMs:    15000,
