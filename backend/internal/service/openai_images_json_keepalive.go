@@ -133,6 +133,18 @@ func OpenAIImagesJSONKeepalivePresent(c *gin.Context) bool {
 	return openAIImagesJSONKeepaliveFromContext(c) != nil
 }
 
+// OpenAIImagesJSONKeepaliveCommitted 报告心跳是否已把响应提交为 200（即请求
+// 已超过一个心跳间隔）。只读观察，不停止心跳，供 handler 打观测日志。
+func OpenAIImagesJSONKeepaliveCommitted(c *gin.Context) bool {
+	k := openAIImagesJSONKeepaliveFromContext(c)
+	if k == nil {
+		return false
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.started
+}
+
 // OpenAIImagesJSONKeepaliveAdjustedWrittenSize excludes heartbeat whitespace
 // from response-size checks so account retry and failover remain available.
 func OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c *gin.Context) int {

@@ -446,8 +446,63 @@ func TestOpenAIEnsureForwardErrorResponse_FastImageJSONKeepalivePreservesComplet
 	require.Equal(t, "ZmFzdC1pbWFnZQ==", gjson.Get(w.Body.String(), "data.0.b64_json").String())
 }
 
-func TestShouldLogOpenAIForwardFailureAsWarn(t *testing.T) {
+func TestOpenAIForwardMayFailover_JSONKeepaliveHeartbeatsDoNotBlockFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+
+	stop := service.StartOpenAIImagesJSONKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	before := service.OpenAIForwardAdjustedWrittenSize(c)
+	require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+
+	failoverErr := &service.UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+	require.True(t, openAIForwardMayFailover(c, before, failoverErr),
+		"JSON heartbeat padding alone must not block failover (#3887)")
+}
+
+func TestOpenAIForwardMayFailover_JSONKeepaliveSemanticWriteBlocksFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+
+	stop := service.StartOpenAIImagesJSONKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	before := service.OpenAIForwardAdjustedWrittenSize(c)
+	require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+	c.JSON(http.StatusOK, gin.H{"id": "resp_partial"})
+	require.Greater(t, service.OpenAIForwardAdjustedWrittenSize(c), before)
+
+	failoverErr := &service.UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+	require.False(t, openAIForwardMayFailover(c, before, failoverErr),
+		"semantic JSON output after heartbeat must block failover")
+}
+
+func TestOpenAIErrorResponse_JSONKeepaliveCommittedWritesSingleJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+
+	stop := service.StartOpenAIImagesJSONKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	require.Eventually(t, c.Writer.Written, time.Second, time.Millisecond)
+
+	h := &OpenAIGatewayHandler{}
+	h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+
+	require.Equal(t, http.StatusOK, w.Code, "heartbeat already committed the status")
+	require.True(t, json.Valid(w.Body.Bytes()), w.Body.String())
+	decoder := json.NewDecoder(strings.NewReader(w.Body.String()))
+	var payload map[string]any
+	require.NoError(t, decoder.Decode(&payload))
+	require.ErrorIs(t, decoder.Decode(&payload), io.EOF)
+	require.Equal(t, "upstream_error", gjson.Get(w.Body.String(), "error.type").String())
+}
+
+func TestShouldLogOpenAIForwardFailureAsWarn(t *testing.T) {	gin.SetMode(gin.TestMode)
 
 	t.Run("fallback_written_should_not_downgrade", func(t *testing.T) {
 		w := httptest.NewRecorder()

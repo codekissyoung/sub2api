@@ -146,6 +146,15 @@ func TestBuildOpenAICompactSSEPayload_RejectsNonJSONObject(t *testing.T) {
 	}
 }
 
+func TestOpenAICompactClientWantsStream_ReflectsMark(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	require.False(t, OpenAICompactClientWantsStream(nil))
+	require.False(t, OpenAICompactClientWantsStream(c))
+	MarkOpenAICompactClientStream(c)
+	require.True(t, OpenAICompactClientWantsStream(c))
+}
+
 func TestWriteOpenAICompactSSEBridge_RequiresMarkAndSuccessStatus(t *testing.T) {
 	finalResponse := []byte(`{"id":"resp_1","output":[{"type":"compaction","encrypted_content":"x"}]}`)
 

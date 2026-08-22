@@ -514,6 +514,19 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	pricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
 	c.Request = c.Request.WithContext(pricingCtx)
 
+	// 非流式 /responses 的上游等待期间向客户端发 JSON 空白心跳：上游被强制
+	// stream:true，但非流式客户端要等整段生成完才收到响应头，外层中继
+	// （ai-relay 首字节 65s）会把正常的长 turn 掐成 529。body-signal compact
+	// 客户端按 SSE 消费响应，已由 compact SSE 心跳保活，空白字节会污染 SSE 帧。
+	jsonNonstreamKeepaliveEligible := !reqStream && !service.OpenAICompactClientWantsStream(c)
+	jsonKeepaliveStarted := false
+	var stopJSONKeepalive func()
+	defer func() {
+		if stopJSONKeepalive != nil {
+			stopJSONKeepalive()
+		}
+	}()
+
 	for {
 		// Streaming Forward intentionally detaches the upstream request so usage can
 		// be drained after a disconnect. Re-check the client context before every
@@ -607,10 +620,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 		// Forward request
 		service.SetOpsLatencyMs(c, service.OpsRoutingLatencyMsKey, time.Since(routingStart).Milliseconds())
+		if jsonNonstreamKeepaliveEligible && !jsonKeepaliveStarted {
+			// 复用 images 非流式 JSON 空白心跳实现；failover/错误写回路径已统一
+			// 按该口径扣除心跳字节（ensureForwardErrorResponse 等）。
+			stopJSONKeepalive = service.StartOpenAIImagesJSONKeepalive(c, h.openAIResponsesJSONKeepaliveInterval())
+			jsonKeepaliveStarted = true
+		}
 		forwardStart := time.Now()
 		// 用扣除非语义心跳字节的口径快照：心跳注释不构成语义响应，
 		// 不能因心跳字节变化而放弃 failover 换号（#3887）。
-		writerSizeBeforeForward := service.OpenAICompactKeepaliveAdjustedWrittenSize(c)
+		writerSizeBeforeForward := service.OpenAIForwardAdjustedWrittenSize(c)
 		// 跨 passthrough 边界的 failover：从 Kiro 等透传账号切到 Bedrock 等非透传账号前，
 		// 从不可变的 canonical forwardBody 派生本次尝试 body 并整块剔除上游私有的加密
 		// reasoning item（含耦合的 id/summary），避免非透传上游 400 拒绝 Kiro reasoning 形态。
@@ -629,6 +648,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 		h.recordCyberPolicyIfMarked(c, apiKey, account, subscription, reqModel, err != nil, cyberBlockKeyHTTP, clientRequestedUsageFields(c, channelMapping, reqModel, ""), service.HashUsageRequestPayload(body))
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
+		if jsonKeepaliveStarted && service.OpenAIImagesJSONKeepaliveCommitted(c) {
+			// 心跳已提交 200：本次非流式请求超过一个心跳间隔，靠 keepalive 才
+			// 没被外层首字节超时掐断。上线初期用于观测命中量级，稳定后可降级。
+			reqLog.Info("openai.responses_nonstream_json_keepalive_committed",
+				zap.Int64("account_id", account.ID),
+				zap.Int64("forward_duration_ms", forwardDurationMs),
+				zap.Bool("forward_error", err != nil),
+			)
+		}
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -2859,10 +2887,9 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 	if err == nil || c == nil || c.Writer == nil {
 		return false
 	}
-	// 与快照同口径：排除 compact 心跳字节，避免"仅心跳写出"被误判为
+	// 与快照同口径：扣除各类心跳填充字节，避免"仅心跳写出"被误判为
 	// 响应已写出（#3887）。
-	if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward ||
-		service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
+	if service.OpenAIForwardAdjustedWrittenSize(c) == writerSizeBeforeForward {
 		return false
 	}
 
@@ -2890,7 +2917,7 @@ func openAIForwardMayFailover(c *gin.Context, writerSizeBeforeForward int, failo
 	if c == nil || c.Writer == nil {
 		return false
 	}
-	if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
+	if service.OpenAIForwardAdjustedWrittenSize(c) == writerSizeBeforeForward {
 		return true
 	}
 	return failoverErr != nil && failoverErr.SafeToFailoverAfterWrite
@@ -2939,6 +2966,15 @@ func (h *OpenAIGatewayHandler) openAICompactKeepaliveInterval() time.Duration {
 		return 0
 	}
 	return time.Duration(h.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+}
+
+// openAIResponsesJSONKeepaliveInterval 非流式 /responses 的 JSON 空白心跳间隔；
+// 0 表示禁用（与 images 非流式心跳语义一致）。
+func (h *OpenAIGatewayHandler) openAIResponsesJSONKeepaliveInterval() time.Duration {
+	if h.cfg == nil || h.cfg.Gateway.ResponsesNonstreamKeepaliveInterval <= 0 {
+		return 0
+	}
+	return time.Duration(h.cfg.Gateway.ResponsesNonstreamKeepaliveInterval) * time.Second
 }
 
 func setOpenAIClientTransportHTTP(c *gin.Context) {

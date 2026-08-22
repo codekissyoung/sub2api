@@ -117,6 +117,21 @@ func TestOpenAIImagesJSONKeepalive_DoesNotBlockFailoverDetection(t *testing.T) {
 	require.True(t, strings.TrimSpace(rec.Body.String()) == "")
 }
 
+func TestOpenAIImagesJSONKeepaliveCommitted_ReportsFirstBeatWithoutStopping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	require.False(t, OpenAIImagesJSONKeepaliveCommitted(c))
+
+	stop := StartOpenAIImagesJSONKeepalive(c, 5*time.Millisecond)
+	defer stop()
+	require.False(t, OpenAIImagesJSONKeepaliveCommitted(c), "no beat before the first interval")
+	require.Eventually(t, func() bool { return OpenAIImagesJSONKeepaliveCommitted(c) }, time.Second, time.Millisecond)
+	require.True(t, OpenAIImagesJSONKeepalivePresent(c), "committed check must not stop the keepalive")
+}
+
 func TestOpenAIImagesJSONKeepalive_KeepsOAuthNonStreamResponseValid(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
