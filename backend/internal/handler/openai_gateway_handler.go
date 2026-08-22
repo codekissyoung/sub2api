@@ -381,6 +381,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+
+	// 修补 OpenAI 严格模式结构化输出 schema（required 缺键 /
+	// additionalProperties 缺失会在上游变成硬 400，典型如第三方客户端
+	// 生成的 response_format）。显式 strict:false 不动。
+	if repairedBody, repairedCount := service.RepairOpenAIStrictJSONSchemaInBody(body); repairedCount > 0 {
+		reqLog.Info("openai.strict_json_schema_repaired", zap.Int("repaired_nodes", repairedCount))
+		body = repairedBody
+	}
 	previousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
 	if previousResponseID != "" {
 		previousResponseIDKind := service.ClassifyOpenAIPreviousResponseIDKind(previousResponseID)

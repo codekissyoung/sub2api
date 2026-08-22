@@ -95,6 +95,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 
+	// 同 /responses：修补 OpenAI 严格模式结构化输出 schema，避免上游硬 400。
+	if repairedBody, repairedCount := service.RepairOpenAIStrictJSONSchemaInBody(body); repairedCount > 0 {
+		reqLog.Info("openai_chat_completions.strict_json_schema_repaired", zap.Int("repaired_nodes", repairedCount))
+		body = repairedBody
+	}
+
 	setOpsRequestContext(c, reqModel, reqStream)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(reqStream, false)))
 
