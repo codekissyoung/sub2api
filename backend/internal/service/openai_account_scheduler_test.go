@@ -2730,6 +2730,24 @@ func TestWeightedShuffleOpenAITier_DegradedWeightDiscounted(t *testing.T) {
 	require.Greater(t, rate, 0.005, "degraded candidate must retain nonzero traffic for recovery, got %.3f", rate)
 }
 
+func TestNoteOpenAICandidateDegraded_TracksTransitions(t *testing.T) {
+	scheduler := &defaultOpenAIAccountScheduler{}
+
+	scheduler.noteOpenAICandidateDegraded(201, false, 0, 1000, true)
+	prev, loaded := scheduler.degradedState[201]
+	require.True(t, loaded)
+	require.False(t, prev)
+
+	scheduler.noteOpenAICandidateDegraded(201, true, 0.9, 30000, true)
+	require.True(t, scheduler.degradedState[201])
+
+	scheduler.noteOpenAICandidateDegraded(201, true, 0.9, 30000, true)
+	require.True(t, scheduler.degradedState[201], "重复同状态不得改变记录")
+
+	scheduler.noteOpenAICandidateDegraded(201, false, 0.1, 1000, true)
+	require.False(t, scheduler.degradedState[201], "恢复后状态应翻转")
+}
+
 func TestBuildOpenAIAccountLoadPlan_MarksDegradedFromRuntimeStats(t *testing.T) {
 	stats := newOpenAIAccountRuntimeStats()
 	slowTTFT := 30000

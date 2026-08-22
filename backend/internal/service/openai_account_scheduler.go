@@ -290,6 +290,40 @@ type defaultOpenAIAccountScheduler struct {
 	metrics                openAIAccountSchedulerMetrics
 	stats                  *openAIAccountRuntimeStats
 	grokFreeQuotaGateCache sync.Map // key: int64(accountID), value: grokFreeQuotaGateCacheEntry
+	degradedStateMu        sync.Mutex
+	degradedState          map[int64]bool // 上次构建 plan 时的 degraded 状态，用于翻转日志
+}
+
+// noteOpenAICandidateDegraded 在账号 degraded 状态翻转时打一行日志
+// （进入/解除各一次），稳态不重复输出。
+func (s *defaultOpenAIAccountScheduler) noteOpenAICandidateDegraded(accountID int64, degraded bool, errorRate, ttft float64, hasTTFT bool) {
+	s.degradedStateMu.Lock()
+	if s.degradedState == nil {
+		s.degradedState = make(map[int64]bool)
+	}
+	prev, loaded := s.degradedState[accountID]
+	unchanged := loaded && prev == degraded
+	if !unchanged {
+		s.degradedState[accountID] = degraded
+	}
+	s.degradedStateMu.Unlock()
+	if unchanged {
+		return
+	}
+	if degraded {
+		slog.Warn("openai_account_degraded",
+			"account_id", accountID,
+			"error_rate", errorRate,
+			"ttft_ms", ttft,
+			"has_ttft", hasTTFT,
+		)
+	} else if loaded {
+		slog.Info("openai_account_degraded_recovered",
+			"account_id", accountID,
+			"error_rate", errorRate,
+			"ttft_ms", ttft,
+		)
+	}
 }
 
 type openAISelectionProbeBudget struct {
@@ -880,6 +914,7 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 		}
 		degraded := escapeCfg.enabled &&
 			((hasTTFT && ttft > escapeCfg.ttftMs) || errorRate > escapeCfg.errorRate)
+		s.noteOpenAICandidateDegraded(account.ID, degraded, errorRate, ttft, hasTTFT)
 		allCandidates = append(allCandidates, openAIAccountCandidateScore{
 			account:   account,
 			loadInfo:  loadInfo,
