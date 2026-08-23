@@ -186,6 +186,19 @@ func TestOpenAIWSDial5xxRecordsModelTransient(t *testing.T) {
 	}, time.Second, 10*time.Millisecond)
 }
 
+// TestIsOpenAIWSRateLimitsEvent 守护 rate_limits 事件的识别：转发循环按此
+// 丢弃号池配额水位事件，避免客户端把上游账号的周用量误报成自己的限额。
+func TestIsOpenAIWSRateLimitsEvent(t *testing.T) {
+	require.True(t, isOpenAIWSRateLimitsEvent("rate_limits"))
+	require.True(t, isOpenAIWSRateLimitsEvent("  rate_limits  "))
+	require.False(t, isOpenAIWSRateLimitsEvent(""))
+	require.False(t, isOpenAIWSRateLimitsEvent("response.completed"))
+	require.False(t, isOpenAIWSRateLimitsEvent("error"))
+	// token/终止事件集合不受影响
+	require.False(t, isOpenAIWSTokenEvent("rate_limits"))
+	require.False(t, isOpenAIWSTerminalEvent("rate_limits"))
+}
+
 // TestIsOpenAIWSTokenEvent_DisjointWithTerminal 守护「token 事件集合与终止事件集合互斥」的不变量。
 // firstTokenMs 的计算依赖于 isTokenEvent && !isTerminalEvent；
 // 若两者再次出现交集，则 issue #2651 描述的 latency 误报会重现。

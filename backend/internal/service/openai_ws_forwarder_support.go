@@ -320,6 +320,13 @@ func isOpenAIWSTokenEvent(eventType string) bool {
 	return false
 }
 
+// isOpenAIWSRateLimitsEvent 识别 Codex WS 的 rate_limits 事件。其数值是上游
+// 号池账号的配额水位，透传给客户端会被 Codex CLI 误报成用户自己的
+// "weekly limit" 警告；转发循环按此丢弃，不下发也不进 replay 收集器。
+func isOpenAIWSRateLimitsEvent(eventType string) bool {
+	return strings.TrimSpace(eventType) == "rate_limits"
+}
+
 func replaceOpenAIWSMessageModel(message []byte, fromModel, toModel string) []byte {
 	if len(message) == 0 {
 		return message
