@@ -1021,7 +1021,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 			if !clientDisconnected {
 				if isOpenAIWSRateLimitsEvent(eventType) {
-					continue
+					upstreamMessage = rewriteOpenAIWSRateLimitsEvent(upstreamMessage)
 				}
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)

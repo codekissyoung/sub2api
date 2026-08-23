@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 // TestIsOpenAIWSTokenEvent_TerminalEventsExcluded 覆盖 isOpenAIWSTokenEvent 的回归用例。
@@ -187,7 +189,7 @@ func TestOpenAIWSDial5xxRecordsModelTransient(t *testing.T) {
 }
 
 // TestIsOpenAIWSRateLimitsEvent 守护 rate_limits 事件的识别：转发循环按此
-// 丢弃号池配额水位事件，避免客户端把上游账号的周用量误报成自己的限额。
+// 识别并改写号池配额水位事件，避免客户端把上游账号的周用量误报成自己的限额。
 func TestIsOpenAIWSRateLimitsEvent(t *testing.T) {
 	require.True(t, isOpenAIWSRateLimitsEvent("rate_limits"))
 	require.True(t, isOpenAIWSRateLimitsEvent("  rate_limits  "))
@@ -197,6 +199,32 @@ func TestIsOpenAIWSRateLimitsEvent(t *testing.T) {
 	// token/终止事件集合不受影响
 	require.False(t, isOpenAIWSTokenEvent("rate_limits"))
 	require.False(t, isOpenAIWSTerminalEvent("rate_limits"))
+}
+
+func TestRewriteOpenAIWSRateLimitsEvent(t *testing.T) {
+	t.Run("used_percent 字段统一压到固定值且保留结构", func(t *testing.T) {
+		in := []byte(`{"type":"rate_limits","rate_limits":{"primary":{"used_percent":97.5,"window_minutes":300,"resets_in_seconds":1234},"secondary":{"used_percent":63,"window_minutes":10080}}}`)
+		out := rewriteOpenAIWSRateLimitsEvent(in)
+		require.True(t, json.Valid(out))
+		require.Equal(t, "rate_limits", gjson.GetBytes(out, "type").String())
+		require.Equal(t, 10.0, gjson.GetBytes(out, "rate_limits.primary.used_percent").Float())
+		require.Equal(t, 10.0, gjson.GetBytes(out, "rate_limits.secondary.used_percent").Float())
+		require.Equal(t, int64(1234), gjson.GetBytes(out, "rate_limits.primary.resets_in_seconds").Int())
+		require.Equal(t, int64(10080), gjson.GetBytes(out, "rate_limits.secondary.window_minutes").Int())
+	})
+
+	t.Run("camelCase 变体同样命中", func(t *testing.T) {
+		in := []byte(`{"type":"rate_limits","limits":[{"usedPercent":88}]}`)
+		out := rewriteOpenAIWSRateLimitsEvent(in)
+		require.Equal(t, 10.0, gjson.GetBytes(out, "limits.0.usedPercent").Float())
+	})
+
+	t.Run("畸形或无目标字段时原样返回", func(t *testing.T) {
+		broken := []byte(`{"type":"rate_limits",`)
+		require.Equal(t, broken, rewriteOpenAIWSRateLimitsEvent(broken))
+		noFields := []byte(`{"type":"rate_limits","rate_limits":{"primary":{"window_minutes":300}}}`)
+		require.Equal(t, noFields, rewriteOpenAIWSRateLimitsEvent(noFields))
+	})
 }
 
 // TestIsOpenAIWSTokenEvent_DisjointWithTerminal 守护「token 事件集合与终止事件集合互斥」的不变量。

@@ -321,10 +321,59 @@ func isOpenAIWSTokenEvent(eventType string) bool {
 }
 
 // isOpenAIWSRateLimitsEvent 识别 Codex WS 的 rate_limits 事件。其数值是上游
-// 号池账号的配额水位，透传给客户端会被 Codex CLI 误报成用户自己的
-// "weekly limit" 警告；转发循环按此丢弃，不下发也不进 replay 收集器。
+// 号池账号的配额水位，原样透传会被 Codex CLI 误报成用户自己的 "weekly limit"
+// 警告；转发循环按此识别并改写（见 rewriteOpenAIWSRateLimitsEvent）。
 func isOpenAIWSRateLimitsEvent(eventType string) bool {
 	return strings.TrimSpace(eventType) == "rate_limits"
+}
+
+// openAIWSRateLimitsUsedPercentFixed 是改写给客户端的固定用量百分比。
+const openAIWSRateLimitsUsedPercentFixed = 10.0
+
+// rewriteOpenAIWSRateLimitsEvent 把 rate_limits 事件里的用量百分比统一改写为
+// 固定低值（10%）：保留事件结构与窗口/重置字段，客户端不再就号池账号的水位
+// 告警。不感知具体嵌套结构：递归把任何名为 used_percent/usedPercent 的数值
+// 字段压到固定值。解析失败或没有命中字段时原样返回——改写绝不能打断转发。
+func rewriteOpenAIWSRateLimitsEvent(message []byte) []byte {
+	var root any
+	if err := json.Unmarshal(message, &root); err != nil {
+		return message
+	}
+	if !rewriteOpenAIWSUsedPercentFields(root) {
+		return message
+	}
+	out, err := json.Marshal(root)
+	if err != nil {
+		return message
+	}
+	return out
+}
+
+func rewriteOpenAIWSUsedPercentFields(node any) bool {
+	changed := false
+	switch typed := node.(type) {
+	case map[string]any:
+		for key, value := range typed {
+			lowerKey := strings.ToLower(key)
+			if strings.Contains(lowerKey, "used_percent") || strings.Contains(lowerKey, "usedpercent") {
+				if _, isNumber := value.(float64); isNumber {
+					typed[key] = openAIWSRateLimitsUsedPercentFixed
+					changed = true
+					continue
+				}
+			}
+			if rewriteOpenAIWSUsedPercentFields(value) {
+				changed = true
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if rewriteOpenAIWSUsedPercentFields(item) {
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 func replaceOpenAIWSMessageModel(message []byte, fromModel, toModel string) []byte {
