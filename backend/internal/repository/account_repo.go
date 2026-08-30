@@ -67,6 +67,8 @@ var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_usage_updated_at":     {},
 	"grok_billing_snapshot":      {},
 	"session_window_utilization": {},
+	// rt_rotated_at 仅是手动 RT 轮换的运维展示锚点，不影响调度快照。
+	"rt_rotated_at": {},
 }
 
 const postgresParameterBatchSize = 50000

@@ -26,6 +26,9 @@ type refreshAPIAccountRepo struct {
 	updateErr               error
 	updateCalls             int
 	updateCredentialsCalls  int
+	updateExtraCalls        int
+	updateExtraErr          error
+	lastExtraUpdates        map[string]any
 	successCASCalls         int
 	beforeSuccessCAS        func(*refreshAPIAccountRepo)
 	lastExpectedCredentials map[string]any
@@ -68,6 +71,20 @@ func (r *refreshAPIAccountRepo) UpdateCredentials(_ context.Context, id int64, c
 	}
 	r.account.Credentials = shallowCopyMap(credentials)
 	return nil
+}
+
+func (r *refreshAPIAccountRepo) UpdateExtra(_ context.Context, id int64, updates map[string]any) error {
+	r.updateExtraCalls++
+	r.lastExtraUpdates = shallowCopyMap(updates)
+	if r.account != nil && r.account.ID == id {
+		if r.account.Extra == nil {
+			r.account.Extra = map[string]any{}
+		}
+		for key, value := range updates {
+			r.account.Extra[key] = value
+		}
+	}
+	return r.updateExtraErr
 }
 
 func (r *refreshAPIAccountRepo) UpdateGrokOAuthCredentialsIfUnchanged(
@@ -1077,6 +1094,13 @@ func TestOAuthRefreshAPI_RotateRefreshToken_ForcesRotationBeforeExpiry(t *testin
 	require.True(t, result.Refreshed)
 	require.Equal(t, "new-refresh", repo.account.GetCredential("refresh_token"))
 	require.NotZero(t, repo.account.GetCredentialAsInt64("_token_version"))
+	// 手动轮换成功必须写入 rt_rotated_at 运维锚点（extra + 返回值内存态）
+	require.Equal(t, 1, repo.updateExtraCalls)
+	rotatedAt, ok := repo.lastExtraUpdates["rt_rotated_at"].(string)
+	require.True(t, ok, "rt_rotated_at marker must be recorded")
+	_, parseErr := time.Parse(time.RFC3339, rotatedAt)
+	require.NoError(t, parseErr)
+	require.Equal(t, rotatedAt, result.Account.Extra["rt_rotated_at"])
 }
 
 func TestOAuthRefreshAPI_RotateRefreshToken_RequiresReplacementRT(t *testing.T) {
@@ -1115,6 +1139,8 @@ func TestOAuthRefreshAPI_RotateRefreshToken_RequiresReplacementRT(t *testing.T) 
 			require.ErrorContains(t, err, tt.wantError)
 			require.NotNil(t, result)
 			require.Equal(t, "old-refresh", repo.account.GetCredential("refresh_token"))
+			// 轮换未确认时不得写入 rt_rotated_at 标记
+			require.Zero(t, repo.updateExtraCalls)
 		})
 	}
 }

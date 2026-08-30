@@ -1133,6 +1133,8 @@ export interface Account {
       available_count?: number
       credits?: { expires_at?: string }[]
     }
+    // 手动 RT 轮换成功时间（UTC RFC3339）；OpenAI RT 为不透明格式，运维以此作为链到手锚点
+    rt_rotated_at?: string
   } & Record<string, unknown>)
   proxy_id: number | null
   proxy_fallback_origin_id?: number | null

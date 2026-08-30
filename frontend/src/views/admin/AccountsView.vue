@@ -384,6 +384,9 @@
           <template #cell-last_used_at="{ value }">
             <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatRelativeTime(value) }}</span>
           </template>
+          <template #cell-rt_rotated_at="{ row }">
+            <span class="text-sm text-gray-500 dark:text-dark-400">{{ row.extra?.rt_rotated_at ? formatDateTime(row.extra.rt_rotated_at) : '—' }}</span>
+          </template>
           <template #cell-created_at="{ value }">
             <span class="text-sm text-gray-500 dark:text-dark-400">{{ formatDateTime(value) }}</span>
           </template>
@@ -1612,6 +1615,7 @@ const allColumns = computed(() => {
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
     { key: 'upstream_billing_rate', label: t('admin.accounts.columns.upstreamBillingRate'), sortable: true },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
+    { key: 'rt_rotated_at', label: t('admin.accounts.columns.rtRotatedAt'), sortable: false },
     { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
     { key: 'notes', label: t('admin.accounts.columns.notes'), sortable: false },

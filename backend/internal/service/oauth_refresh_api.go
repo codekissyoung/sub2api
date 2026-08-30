@@ -198,6 +198,11 @@ func (api *OAuthRefreshAPI) getLocalLock(cacheKey string) *contextMutex {
 // RotateRefreshToken immediately consumes the current refresh token and stores
 // the provider-issued replacement. It uses the same local/distributed lock as
 // automatic refresh, but deliberately bypasses the expiry-window check.
+//
+// 手动轮换成功后在 extra 写入 rt_rotated_at（UTC RFC3339）：OpenAI 的 RT 是
+// rt.1.<opaque> 格式、无法本地解码到期时间，运维上只能以"本机最后一次轮换
+// 确认链到手的时间"作为链状态锚点，由管理端账号页展示。标记写入失败不影响
+// 轮换本身的结果。
 func (api *OAuthRefreshAPI) RotateRefreshToken(
 	ctx context.Context,
 	account *Account,
@@ -208,9 +213,26 @@ func (api *OAuthRefreshAPI) RotateRefreshToken(
 	}
 	ctx = context.WithValue(ctx, oauthRefreshManualRotationKey{}, true)
 	ctx = withOAuthRefreshRequestPath(ctx)
-	return api.RefreshIfNeeded(ctx, account, &forcedRefreshTokenRotationExecutor{
+	result, err := api.RefreshIfNeeded(ctx, account, &forcedRefreshTokenRotationExecutor{
 		OAuthRefreshExecutor: executor,
 	}, 0)
+	if err == nil && result != nil && result.Refreshed && result.Account != nil && api.accountRepo != nil {
+		rotatedAt := time.Now().UTC().Format(time.RFC3339)
+		if extraErr := api.accountRepo.UpdateExtra(ctx, result.Account.ID, map[string]any{
+			"rt_rotated_at": rotatedAt,
+		}); extraErr != nil {
+			slog.Warn("rt_rotated_at_extra_update_failed",
+				"account_id", result.Account.ID,
+				"error", extraErr,
+			)
+		} else {
+			if result.Account.Extra == nil {
+				result.Account.Extra = map[string]any{}
+			}
+			result.Account.Extra["rt_rotated_at"] = rotatedAt
+		}
+	}
+	return result, err
 }
 
 // RefreshIfNeeded 在分布式锁保护下按需刷新 OAuth token

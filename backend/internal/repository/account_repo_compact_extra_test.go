@@ -23,3 +23,9 @@ func TestShouldEnqueueSchedulerOutboxForExtraUpdates_OpenAIResponsesCapabilityKe
 		t.Fatalf("expected responses capability updates to enqueue scheduler outbox")
 	}
 }
+
+func TestShouldEnqueueSchedulerOutboxForExtraUpdates_RTRotatedAtIsNeutral(t *testing.T) {
+	if shouldEnqueueSchedulerOutboxForExtraUpdates(map[string]any{"rt_rotated_at": "2026-08-30T02:37:00Z"}) {
+		t.Fatalf("expected rt_rotated_at marker updates to stay scheduler-neutral")
+	}
+}
