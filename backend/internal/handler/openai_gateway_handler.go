@@ -454,6 +454,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.String("normalization", "call_output_to_user_message"),
 		)
 	}
+	if normalizedBody, repair := normalizeCodexMissingCallIDs(body); repair.changed() {
+		body = normalizedBody
+		reqLog.Info("openai.codex_missing_call_id_repaired",
+			zap.Int("calls_assigned", repair.callsAssigned),
+			zap.Int("outputs_assigned", repair.outputsAssigned),
+		)
+	}
 
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
