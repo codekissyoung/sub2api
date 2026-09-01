@@ -7,7 +7,7 @@
 # or `make build` for production — use this script.
 #
 # Usage:   deploy/ice-do-db/deploy.sh        (run once per host: ice-do-db, then ice-do-web-2)
-# Env:     REMOTE=ice-do-db|ice-do-web-2  SKIP_TESTS=1  ALLOW_DIRTY=1
+# Env:     REMOTE=ice-do-db|ice-do-web-2  SKIP_TESTS=1  SKIP_BACKUP=1  ALLOW_DIRTY=1
 #          LISTEN=http://<vpc-ip>:8320 (override for other hosts)
 set -euo pipefail
 
@@ -66,8 +66,12 @@ fi
 echo "    embed marker found"
 
 echo "==> 5/7 pre-deploy database backup"
-ssh -o BatchMode=yes "$REMOTE" \
-  'flock -n /tmp/backup-sub2api-pg.lock /home/iec/deploy/bin/backup-sub2api-pg-to-oss' | tail -1
+if [[ "${SKIP_BACKUP:-0}" != "1" ]]; then
+  ssh -o BatchMode=yes "$REMOTE" \
+    'flock -n /tmp/backup-sub2api-pg.lock /home/iec/deploy/bin/backup-sub2api-pg-to-oss' | tail -1
+else
+  echo "    skipped (SKIP_BACKUP=1; shared DB already backed up this release)"
+fi
 
 echo "==> 6/7 upload + flip + restart"
 TS="$(date -u +%Y%m%dT%H%M%SZ)"

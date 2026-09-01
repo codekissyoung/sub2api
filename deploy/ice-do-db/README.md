@@ -9,9 +9,12 @@ public hostname — `ice-do-db` (10.124.0.3:8320) and `ice-do-web-2`
 Deploy to both hosts, one at a time:
 
 ```bash
-deploy/ice-do-db/deploy.sh                 # ice-do-db
-REMOTE=ice-do-web-2 deploy/ice-do-db/deploy.sh
+deploy/ice-do-db/deploy.sh                 # ice-do-db (includes the DB backup)
+REMOTE=ice-do-web-2 SKIP_TESTS=1 SKIP_BACKUP=1 deploy/ice-do-db/deploy.sh
 ```
+
+The database is shared, so it is backed up once (on the first host);
+pass `SKIP_BACKUP=1` for the rest.
 
 ## Runtime layout
 
