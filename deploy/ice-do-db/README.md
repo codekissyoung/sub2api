@@ -6,15 +6,16 @@ public hostname — `ice-do-db` (10.124.0.3:8320) and `ice-do-web-2`
 (10.124.0.5:8320) — sharing the PostgreSQL/Redis on `ice-do-db`.
 (`ice-do-web-1` is decommissioned; do not deploy to it.)
 
-Deploy to both hosts, one at a time:
+Deploy builds ONCE and pushes the same binary to both hosts in turn:
 
 ```bash
-deploy/ice-do-db/deploy.sh                 # ice-do-db (includes the DB backup)
-REMOTE=ice-do-web-2 SKIP_TESTS=1 SKIP_BACKUP=1 deploy/ice-do-db/deploy.sh
+deploy/ice-do-db/deploy.sh              # build once, deploy ice-do-db + ice-do-web-2
+deploy/ice-do-db/deploy.sh ice-do-db    # single host only
 ```
 
-The database is shared, so it is backed up once (on the first host);
-pass `SKIP_BACKUP=1` for the rest.
+The shared database is backed up once (on `ice-do-db`) before any host is
+touched; `SKIP_BACKUP=1` skips it. The second host costs ~30s (upload +
+flip + restart + verify), not a rebuild.
 
 ## Runtime layout
 
