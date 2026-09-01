@@ -6,15 +6,26 @@
 # page route returns 404 while APIs keep working. Do not hand-run `go build`
 # or `make build` for production — use this script.
 #
-# Usage:   deploy/ice-do-db/deploy.sh
-# Env:     REMOTE=ice-do-db  SKIP_TESTS=1  ALLOW_DIRTY=1
+# Usage:   deploy/ice-do-db/deploy.sh        (run once per host: ice-do-db, then ice-do-web-2)
+# Env:     REMOTE=ice-do-db|ice-do-web-2  SKIP_TESTS=1  ALLOW_DIRTY=1
+#          LISTEN=http://<vpc-ip>:8320 (override for other hosts)
 set -euo pipefail
 
 REMOTE="${REMOTE:-ice-do-db}"
 DEPLOY_DIR="/home/iec/deploy"
-LISTEN="http://10.124.0.3:8320"
 PUBLIC_URL="https://sub2api.ieasycode.cc"
 PAGE_PROBE="/admin/accounts"
+
+case "$REMOTE" in
+  ice-do-db)    DEFAULT_LISTEN="http://10.124.0.3:8320" ;;
+  ice-do-web-2) DEFAULT_LISTEN="http://10.124.0.5:8320" ;;
+  *)            DEFAULT_LISTEN="" ;;
+esac
+LISTEN="${LISTEN:-$DEFAULT_LISTEN}"
+if [[ -z "$LISTEN" ]]; then
+  echo "unknown REMOTE=$REMOTE; set LISTEN=http://<vpc-ip>:8320 explicitly" >&2
+  exit 1
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"

@@ -1,7 +1,17 @@
 # ICE production deployment
 
-This directory records the production runtime convention for the single
-Sub2API account-pool instance on `ice-do-db`.
+This directory records the production runtime convention for the Sub2API
+account-pool instances. The pool now runs on TWO hosts behind the same
+public hostname — `ice-do-db` (10.124.0.3:8320) and `ice-do-web-2`
+(10.124.0.5:8320) — sharing the PostgreSQL/Redis on `ice-do-db`.
+(`ice-do-web-1` is decommissioned; do not deploy to it.)
+
+Deploy to both hosts, one at a time:
+
+```bash
+deploy/ice-do-db/deploy.sh                 # ice-do-db
+REMOTE=ice-do-web-2 deploy/ice-do-db/deploy.sh
+```
 
 ## Runtime layout
 
