@@ -568,7 +568,8 @@ func TestOpenAIErrorResponse_JSONKeepaliveCommittedWritesSingleJSON(t *testing.T
 	require.Equal(t, "upstream_error", gjson.Get(w.Body.String(), "error.type").String())
 }
 
-func TestShouldLogOpenAIForwardFailureAsWarn(t *testing.T) {	gin.SetMode(gin.TestMode)
+func TestShouldLogOpenAIForwardFailureAsWarn(t *testing.T) {
+	gin.SetMode(gin.TestMode)
 
 	t.Run("fallback_written_should_not_downgrade", func(t *testing.T) {
 		w := httptest.NewRecorder()
