@@ -442,8 +442,13 @@ type OverloadCooldownSettings struct {
 
 // RateLimit429CooldownSettings 429默认回避配置 DTO
 type RateLimit429CooldownSettings struct {
-	Enabled         bool `json:"enabled"`
-	CooldownSeconds int  `json:"cooldown_seconds"`
+	Enabled               bool `json:"enabled"`
+	CooldownSeconds       int  `json:"cooldown_seconds"`
+	AdaptiveEnabled       bool `json:"adaptive_enabled"`
+	FirstCooldownSeconds  int  `json:"first_cooldown_seconds"`
+	SecondCooldownSeconds int  `json:"second_cooldown_seconds"`
+	ThirdCooldownSeconds  int  `json:"third_cooldown_seconds"`
+	StrikeWindowSeconds   int  `json:"strike_window_seconds"`
 }
 
 // PanelRateLimitSettings 面板 API 限流配置 DTO

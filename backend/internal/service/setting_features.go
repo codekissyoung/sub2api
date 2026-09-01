@@ -733,14 +733,34 @@ func (s *SettingService) GetRateLimit429CooldownSettings(ctx context.Context) (*
 		return DefaultRateLimit429CooldownSettings(), nil
 	}
 
+	normalizeRateLimit429CooldownSettings(&settings)
+
+	return &settings, nil
+}
+
+func normalizeRateLimit429CooldownSettings(settings *RateLimit429CooldownSettings) {
+	if settings == nil {
+		return
+	}
+	defaults := DefaultRateLimit429CooldownSettings()
 	if settings.CooldownSeconds < 1 {
-		settings.CooldownSeconds = 1
+		settings.CooldownSeconds = defaults.CooldownSeconds
 	}
 	if settings.CooldownSeconds > 7200 {
 		settings.CooldownSeconds = 7200
 	}
-
-	return &settings, nil
+	if settings.FirstCooldownSeconds < 1 {
+		settings.FirstCooldownSeconds = defaults.FirstCooldownSeconds
+	}
+	if settings.SecondCooldownSeconds < 1 {
+		settings.SecondCooldownSeconds = defaults.SecondCooldownSeconds
+	}
+	if settings.ThirdCooldownSeconds < 1 {
+		settings.ThirdCooldownSeconds = defaults.ThirdCooldownSeconds
+	}
+	if settings.StrikeWindowSeconds < 1 {
+		settings.StrikeWindowSeconds = defaults.StrikeWindowSeconds
+	}
 }
 
 // SetRateLimit429CooldownSettings 设置429默认回避配置
@@ -754,6 +774,25 @@ func (s *SettingService) SetRateLimit429CooldownSettings(ctx context.Context, se
 			return fmt.Errorf("cooldown_seconds must be between 1-7200")
 		}
 		settings.CooldownSeconds = 5
+	}
+	if settings.AdaptiveEnabled {
+		for field, seconds := range map[string]int{
+			"first_cooldown_seconds":  settings.FirstCooldownSeconds,
+			"second_cooldown_seconds": settings.SecondCooldownSeconds,
+			"third_cooldown_seconds":  settings.ThirdCooldownSeconds,
+		} {
+			if seconds < 1 || seconds > 7200 {
+				return fmt.Errorf("%s must be between 1-7200", field)
+			}
+		}
+		if settings.FirstCooldownSeconds > settings.SecondCooldownSeconds || settings.SecondCooldownSeconds > settings.ThirdCooldownSeconds {
+			return fmt.Errorf("adaptive cooldowns must be non-decreasing")
+		}
+		if settings.StrikeWindowSeconds < settings.ThirdCooldownSeconds || settings.StrikeWindowSeconds > 86400 {
+			return fmt.Errorf("strike_window_seconds must be between third_cooldown_seconds and 86400")
+		}
+	} else {
+		normalizeRateLimit429CooldownSettings(settings)
 	}
 
 	data, err := json.Marshal(settings)

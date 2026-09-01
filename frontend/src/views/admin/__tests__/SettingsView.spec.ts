@@ -678,6 +678,11 @@ describe("admin SettingsView payment visible method controls", () => {
     getRateLimit429CooldownSettings.mockResolvedValue({
       enabled: true,
       cooldown_seconds: 5,
+      adaptive_enabled: false,
+      first_cooldown_seconds: 10,
+      second_cooldown_seconds: 30,
+      third_cooldown_seconds: 60,
+      strike_window_seconds: 120,
     });
     updateRateLimit429CooldownSettings.mockImplementation(async (payload) => payload);
     getStreamTimeoutSettings.mockResolvedValue({
@@ -769,6 +774,44 @@ describe("admin SettingsView payment visible method controls", () => {
       heavy_rpm: 60,
       exempt_admin: true,
       public_ip_rpm: 300,
+    });
+    expect(showSuccess).toHaveBeenCalled();
+  });
+
+  it("loads and saves adaptive 429 cooldown settings", async () => {
+    getRateLimit429CooldownSettings.mockClear();
+    updateRateLimit429CooldownSettings.mockClear();
+    getRateLimit429CooldownSettings.mockResolvedValue({
+      enabled: true,
+      cooldown_seconds: 30,
+      adaptive_enabled: true,
+      first_cooldown_seconds: 10,
+      second_cooldown_seconds: 30,
+      third_cooldown_seconds: 60,
+      strike_window_seconds: 120,
+    });
+    updateRateLimit429CooldownSettings.mockImplementation(async (payload) => payload);
+
+    const wrapper = mountView();
+    await flushPromises();
+
+    expect(getRateLimit429CooldownSettings).toHaveBeenCalled();
+    expect((wrapper.get('[data-testid="rate-limit-429-adaptive-toggle"]').element as HTMLInputElement).checked).toBe(true);
+    await wrapper.get('[data-testid="rate-limit-429-first"]').setValue("12");
+    await wrapper.get('[data-testid="rate-limit-429-second"]').setValue("36");
+    await wrapper.get('[data-testid="rate-limit-429-third"]').setValue("72");
+    await wrapper.get('[data-testid="rate-limit-429-window"]').setValue("180");
+    await wrapper.get('[data-testid="rate-limit-429-save"]').trigger("click");
+    await flushPromises();
+
+    expect(updateRateLimit429CooldownSettings).toHaveBeenCalledWith({
+      enabled: true,
+      cooldown_seconds: 30,
+      adaptive_enabled: true,
+      first_cooldown_seconds: 12,
+      second_cooldown_seconds: 36,
+      third_cooldown_seconds: 72,
+      strike_window_seconds: 180,
     });
     expect(showSuccess).toHaveBeenCalled();
   });
@@ -1585,6 +1628,11 @@ describe("admin SettingsView wechat connect controls", () => {
     getRateLimit429CooldownSettings.mockResolvedValue({
       enabled: true,
       cooldown_seconds: 5,
+      adaptive_enabled: false,
+      first_cooldown_seconds: 10,
+      second_cooldown_seconds: 30,
+      third_cooldown_seconds: 60,
+      strike_window_seconds: 120,
     });
     updateRateLimit429CooldownSettings.mockImplementation(async (payload) => payload);
     getStreamTimeoutSettings.mockResolvedValue({

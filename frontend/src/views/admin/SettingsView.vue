@@ -344,13 +344,30 @@
                   v-if="rateLimit429CooldownForm.enabled"
                   class="space-y-4 border-t border-gray-100 pt-4 dark:border-dark-700"
                 >
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">{{
+                        t("admin.settings.rateLimit429Cooldown.adaptiveEnabled")
+                      }}</label>
+                      <p class="text-sm text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.rateLimit429Cooldown.adaptiveEnabledHint") }}
+                      </p>
+                    </div>
+                    <Toggle
+                      v-model="rateLimit429CooldownForm.adaptive_enabled"
+                      data-testid="rate-limit-429-adaptive-toggle"
+                    />
+                  </div>
+
                   <div>
                     <label
                       class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
                     >
                       {{
                         t(
-                          "admin.settings.rateLimit429Cooldown.cooldownSeconds",
+                          rateLimit429CooldownForm.adaptive_enabled
+                            ? "admin.settings.rateLimit429Cooldown.fallbackCooldownSeconds"
+                            : "admin.settings.rateLimit429Cooldown.cooldownSeconds",
                         )
                       }}
                     </label>
@@ -369,6 +386,39 @@
                       }}
                     </p>
                   </div>
+
+                  <div
+                    v-if="rateLimit429CooldownForm.adaptive_enabled"
+                    class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+                  >
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.rateLimit429Cooldown.firstCooldownSeconds") }}
+                      </label>
+                      <input v-model.number="rateLimit429CooldownForm.first_cooldown_seconds" data-testid="rate-limit-429-first" type="number" min="1" max="7200" class="input w-32" />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.rateLimit429Cooldown.secondCooldownSeconds") }}
+                      </label>
+                      <input v-model.number="rateLimit429CooldownForm.second_cooldown_seconds" data-testid="rate-limit-429-second" type="number" min="1" max="7200" class="input w-32" />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.rateLimit429Cooldown.thirdCooldownSeconds") }}
+                      </label>
+                      <input v-model.number="rateLimit429CooldownForm.third_cooldown_seconds" data-testid="rate-limit-429-third" type="number" min="1" max="7200" class="input w-32" />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.rateLimit429Cooldown.strikeWindowSeconds") }}
+                      </label>
+                      <input v-model.number="rateLimit429CooldownForm.strike_window_seconds" data-testid="rate-limit-429-window" type="number" min="1" max="86400" class="input w-32" />
+                    </div>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 sm:col-span-2 lg:col-span-4">
+                      {{ t("admin.settings.rateLimit429Cooldown.adaptiveHint") }}
+                    </p>
+                  </div>
                 </div>
 
                 <div
@@ -378,6 +428,7 @@
                     type="button"
                     @click="saveRateLimit429CooldownSettings"
                     :disabled="rateLimit429CooldownSaving"
+                    data-testid="rate-limit-429-save"
                     class="btn btn-primary btn-sm"
                   >
                     <svg
@@ -8937,6 +8988,11 @@ const rateLimit429CooldownSaving = ref(false);
 const rateLimit429CooldownForm = reactive({
   enabled: true,
   cooldown_seconds: 5,
+  adaptive_enabled: false,
+  first_cooldown_seconds: 10,
+  second_cooldown_seconds: 30,
+  third_cooldown_seconds: 60,
+  strike_window_seconds: 120,
 });
 
 // Panel API Rate Limit 状态
@@ -11837,6 +11893,11 @@ async function saveRateLimit429CooldownSettings() {
     const updated = await adminAPI.settings.updateRateLimit429CooldownSettings({
       enabled: rateLimit429CooldownForm.enabled,
       cooldown_seconds: rateLimit429CooldownForm.cooldown_seconds,
+      adaptive_enabled: rateLimit429CooldownForm.adaptive_enabled,
+      first_cooldown_seconds: rateLimit429CooldownForm.first_cooldown_seconds,
+      second_cooldown_seconds: rateLimit429CooldownForm.second_cooldown_seconds,
+      third_cooldown_seconds: rateLimit429CooldownForm.third_cooldown_seconds,
+      strike_window_seconds: rateLimit429CooldownForm.strike_window_seconds,
     });
     Object.assign(rateLimit429CooldownForm, updated);
     appStore.showSuccess(t("admin.settings.rateLimit429Cooldown.saved"));

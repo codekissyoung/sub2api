@@ -561,6 +561,16 @@ type RateLimit429CooldownSettings struct {
 	Enabled bool `json:"enabled"`
 	// CooldownSeconds 默认回避时长（秒）
 	CooldownSeconds int `json:"cooldown_seconds"`
+	// AdaptiveEnabled 对 OpenAI 无 reset 429 启用共享的分级冷却。
+	AdaptiveEnabled bool `json:"adaptive_enabled"`
+	// FirstCooldownSeconds 第一次命中的冷却时长。
+	FirstCooldownSeconds int `json:"first_cooldown_seconds"`
+	// SecondCooldownSeconds 连续第二次命中的冷却时长。
+	SecondCooldownSeconds int `json:"second_cooldown_seconds"`
+	// ThirdCooldownSeconds 连续第三次及之后命中的冷却时长。
+	ThirdCooldownSeconds int `json:"third_cooldown_seconds"`
+	// StrikeWindowSeconds 连续命中的滑动统计窗口；成功请求会提前清零。
+	StrikeWindowSeconds int `json:"strike_window_seconds"`
 }
 
 // DefaultOverloadCooldownSettings 返回默认的过载冷却配置（启用，10分钟）
@@ -574,8 +584,13 @@ func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 // DefaultRateLimit429CooldownSettings 返回默认的429回避配置（启用，5秒）
 func DefaultRateLimit429CooldownSettings() *RateLimit429CooldownSettings {
 	return &RateLimit429CooldownSettings{
-		Enabled:         true,
-		CooldownSeconds: 5,
+		Enabled:               true,
+		CooldownSeconds:       5,
+		AdaptiveEnabled:       false,
+		FirstCooldownSeconds:  10,
+		SecondCooldownSeconds: 30,
+		ThirdCooldownSeconds:  60,
+		StrikeWindowSeconds:   120,
 	}
 }
 

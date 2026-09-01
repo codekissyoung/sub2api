@@ -1289,6 +1289,11 @@ export async function updateOverloadCooldownSettings(
 export interface RateLimit429CooldownSettings {
   enabled: boolean;
   cooldown_seconds: number;
+  adaptive_enabled: boolean;
+  first_cooldown_seconds: number;
+  second_cooldown_seconds: number;
+  third_cooldown_seconds: number;
+  strike_window_seconds: number;
 }
 
 export async function getRateLimit429CooldownSettings(): Promise<RateLimit429CooldownSettings> {

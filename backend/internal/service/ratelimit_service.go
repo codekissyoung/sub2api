@@ -20,18 +20,19 @@ import (
 
 // RateLimitService 处理限流和过载状态管理
 type RateLimitService struct {
-	accountRepo           AccountRepository
-	usageRepo             UsageLogRepository
-	cfg                   *config.Config
-	geminiQuotaService    *GeminiQuotaService
-	tempUnschedCache      TempUnschedCache
-	timeoutCounterCache   TimeoutCounterCache
-	openAI403CounterCache OpenAI403CounterCache
-	settingService        *SettingService
-	tokenCacheInvalidator TokenCacheInvalidator
-	runtimeBlocker        AccountRuntimeBlocker
-	usageCacheMu          sync.RWMutex
-	usageCache            map[int64]*geminiUsageCacheEntry
+	accountRepo             AccountRepository
+	usageRepo               UsageLogRepository
+	cfg                     *config.Config
+	geminiQuotaService      *GeminiQuotaService
+	tempUnschedCache        TempUnschedCache
+	timeoutCounterCache     TimeoutCounterCache
+	openAI403CounterCache   OpenAI403CounterCache
+	rateLimit429StrikeCache RateLimit429StrikeCache
+	settingService          *SettingService
+	tokenCacheInvalidator   TokenCacheInvalidator
+	runtimeBlocker          AccountRuntimeBlocker
+	usageCacheMu            sync.RWMutex
+	usageCache              map[int64]*geminiUsageCacheEntry
 
 	// OpenAI Team 联动熔断的进程内去重：teamID → 去重窗口截止时间
 	openaiTeamLinkedMu     sync.Mutex
@@ -104,6 +105,11 @@ func (s *RateLimitService) SetTimeoutCounterCache(cache TimeoutCounterCache) {
 // SetOpenAI403CounterCache 设置 OpenAI 403 连续失败计数器（可选依赖）
 func (s *RateLimitService) SetOpenAI403CounterCache(cache OpenAI403CounterCache) {
 	s.openAI403CounterCache = cache
+}
+
+// SetRateLimit429StrikeCache sets the shared adaptive OpenAI 429 strike cache.
+func (s *RateLimitService) SetRateLimit429StrikeCache(cache RateLimit429StrikeCache) {
+	s.rateLimit429StrikeCache = cache
 }
 
 // SetSettingService 设置系统设置服务（可选依赖）
@@ -1194,29 +1200,81 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
 	}
 
 	resetAt := time.Now().Add(cooldown)
-	slog.Warn("rate_limit_429_fallback_used", "account_id", account.ID, "platform", account.Platform, "reason", reason, "using_default", cooldown.String())
+	strike := int64(0)
+	advanced := false
+	adaptive := false
+	if settings, err := s.getRateLimit429CooldownSettings(ctx); err == nil &&
+		settings.AdaptiveEnabled && account.Platform == PlatformOpenAI && s.rateLimit429StrikeCache != nil {
+		decision, registerErr := s.rateLimit429StrikeCache.RegisterRateLimit429Strike(
+			ctx,
+			account.ID,
+			time.Duration(settings.FirstCooldownSeconds)*time.Second,
+			time.Duration(settings.SecondCooldownSeconds)*time.Second,
+			time.Duration(settings.ThirdCooldownSeconds)*time.Second,
+			time.Duration(settings.StrikeWindowSeconds)*time.Second,
+		)
+		if registerErr != nil {
+			slog.Warn("rate_limit_429_adaptive_register_failed", "account_id", account.ID, "error", registerErr)
+		} else if decision != nil {
+			adaptive = true
+			strike = decision.Strike
+			advanced = decision.Advanced
+			resetAt = decision.ResetAt
+			cooldown = time.Until(resetAt)
+			if cooldown < 0 {
+				cooldown = 0
+			}
+		}
+	} else if err != nil {
+		slog.Warn("rate_limit_429_settings_read_failed", "account_id", account.ID, "error", err)
+	}
+	slog.Warn("rate_limit_429_fallback_used",
+		"account_id", account.ID,
+		"platform", account.Platform,
+		"reason", reason,
+		"using_default", cooldown.Truncate(time.Millisecond).String(),
+		"adaptive", adaptive,
+		"strike", strike,
+		"advanced", advanced)
 	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 	}
 }
 
-func (s *RateLimitService) get429FallbackCooldown(ctx context.Context, account *Account) (time.Duration, bool) {
-	if s.settingService != nil {
-		settings, err := s.settingService.GetRateLimit429CooldownSettings(ctx)
-		if err == nil && settings != nil {
-			if !settings.Enabled {
-				return 0, false
-			}
-			seconds := clampRateLimit429CooldownSeconds(settings.CooldownSeconds)
-			return time.Duration(seconds) * time.Second, true
-		}
-		slog.Warn("rate_limit_429_settings_read_failed", "account_id", account.ID, "error", err)
+func (s *RateLimitService) getRateLimit429CooldownSettings(ctx context.Context) (*RateLimit429CooldownSettings, error) {
+	if s.settingService == nil {
+		return DefaultRateLimit429CooldownSettings(), nil
 	}
+	return s.settingService.GetRateLimit429CooldownSettings(ctx)
+}
+
+func (s *RateLimitService) get429FallbackCooldown(ctx context.Context, account *Account) (time.Duration, bool) {
+	settings, err := s.getRateLimit429CooldownSettings(ctx)
+	if err == nil && settings != nil {
+		if !settings.Enabled {
+			return 0, false
+		}
+		seconds := clampRateLimit429CooldownSeconds(settings.CooldownSeconds)
+		return time.Duration(seconds) * time.Second, true
+	}
+	slog.Warn("rate_limit_429_settings_read_failed", "account_id", account.ID, "error", err)
 
 	seconds := defaultRateLimit429CooldownSeconds
 	seconds = clampRateLimit429CooldownSeconds(seconds)
 	return time.Duration(seconds) * time.Second, true
+}
+
+// ResetRateLimit429Strike clears the distributed adaptive strike ladder after
+// a successful OpenAI request. It intentionally does not alter persisted
+// rate-limit timestamps; those remain available for audit and expire logically.
+func (s *RateLimitService) ResetRateLimit429Strike(ctx context.Context, accountID int64) {
+	if s == nil || s.rateLimit429StrikeCache == nil || accountID <= 0 {
+		return
+	}
+	if err := s.rateLimit429StrikeCache.ResetRateLimit429Strike(ctx, accountID); err != nil {
+		slog.Warn("rate_limit_429_strike_reset_failed", "account_id", accountID, "error", err)
+	}
 }
 
 func clampRateLimit429CooldownSeconds(seconds int) int {

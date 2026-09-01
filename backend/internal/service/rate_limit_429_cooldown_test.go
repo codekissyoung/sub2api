@@ -20,6 +20,30 @@ type rateLimit429AccountRepoStub struct {
 	lastRateLimitReset time.Time
 }
 
+type rateLimit429StrikeCacheStub struct {
+	decision      *RateLimit429StrikeDecision
+	registerErr   error
+	registerCalls int
+	resetIDs      []int64
+}
+
+func (s *rateLimit429StrikeCacheStub) RegisterRateLimit429Strike(
+	_ context.Context,
+	_ int64,
+	_ time.Duration,
+	_ time.Duration,
+	_ time.Duration,
+	_ time.Duration,
+) (*RateLimit429StrikeDecision, error) {
+	s.registerCalls++
+	return s.decision, s.registerErr
+}
+
+func (s *rateLimit429StrikeCacheStub) ResetRateLimit429Strike(_ context.Context, accountID int64) error {
+	s.resetIDs = append(s.resetIDs, accountID)
+	return nil
+}
+
 func (r *rateLimit429AccountRepoStub) SetRateLimited(_ context.Context, id int64, resetAt time.Time) error {
 	r.rateLimitCalls++
 	r.lastRateLimitID = id
@@ -35,6 +59,37 @@ func TestGetRateLimit429CooldownSettings_DefaultsWhenNotSet(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, settings.Enabled)
 	require.Equal(t, 5, settings.CooldownSeconds)
+	require.False(t, settings.AdaptiveEnabled)
+	require.Equal(t, 10, settings.FirstCooldownSeconds)
+	require.Equal(t, 30, settings.SecondCooldownSeconds)
+	require.Equal(t, 60, settings.ThirdCooldownSeconds)
+	require.Equal(t, 120, settings.StrikeWindowSeconds)
+}
+
+func TestSetRateLimit429CooldownSettings_AdaptiveValidation(t *testing.T) {
+	svc := NewSettingService(newMockSettingRepo(), &config.Config{})
+
+	err := svc.SetRateLimit429CooldownSettings(context.Background(), &RateLimit429CooldownSettings{
+		Enabled:               true,
+		CooldownSeconds:       30,
+		AdaptiveEnabled:       true,
+		FirstCooldownSeconds:  10,
+		SecondCooldownSeconds: 5,
+		ThirdCooldownSeconds:  60,
+		StrikeWindowSeconds:   120,
+	})
+	require.EqualError(t, err, "adaptive cooldowns must be non-decreasing")
+
+	err = svc.SetRateLimit429CooldownSettings(context.Background(), &RateLimit429CooldownSettings{
+		Enabled:               true,
+		CooldownSeconds:       30,
+		AdaptiveEnabled:       true,
+		FirstCooldownSeconds:  10,
+		SecondCooldownSeconds: 30,
+		ThirdCooldownSeconds:  60,
+		StrikeWindowSeconds:   30,
+	})
+	require.EqualError(t, err, "strike_window_seconds must be between third_cooldown_seconds and 86400")
 }
 
 func TestGetRateLimit429CooldownSettings_ReadsFromDB(t *testing.T) {
@@ -78,6 +133,59 @@ func TestHandle429_FallbackUsesDBSeconds(t *testing.T) {
 
 	require.Equal(t, 1, accountRepo.rateLimitCalls)
 	require.Equal(t, int64(42), accountRepo.lastRateLimitID)
+	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(12*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(12*time.Second)))
+}
+
+func TestHandle429_FallbackUsesAdaptiveRedisDecisionForOpenAI(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{}
+	settingRepo := newMockSettingRepo()
+	data, _ := json.Marshal(RateLimit429CooldownSettings{
+		Enabled:               true,
+		CooldownSeconds:       30,
+		AdaptiveEnabled:       true,
+		FirstCooldownSeconds:  10,
+		SecondCooldownSeconds: 30,
+		ThirdCooldownSeconds:  60,
+		StrikeWindowSeconds:   120,
+	})
+	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = string(data)
+	resetAt := time.Now().Add(10 * time.Second).Truncate(time.Millisecond)
+	strikeCache := &rateLimit429StrikeCacheStub{decision: &RateLimit429StrikeDecision{
+		Strike: 1, ResetAt: resetAt, Advanced: true,
+	}}
+
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc.SetSettingService(NewSettingService(settingRepo, &config.Config{}))
+	svc.SetRateLimit429StrikeCache(strikeCache)
+	svc.handle429(context.Background(), &Account{ID: 60, Platform: PlatformOpenAI, Type: AccountTypeOAuth}, http.Header{}, []byte(`{"detail":"Rate limit exceeded"}`))
+
+	require.Equal(t, 1, strikeCache.registerCalls)
+	require.Equal(t, resetAt, accountRepo.lastRateLimitReset)
+}
+
+func TestHandle429_AdaptiveDoesNotApplyToAnthropic(t *testing.T) {
+	accountRepo := &rateLimit429AccountRepoStub{}
+	settingRepo := newMockSettingRepo()
+	data, _ := json.Marshal(RateLimit429CooldownSettings{
+		Enabled:               true,
+		CooldownSeconds:       12,
+		AdaptiveEnabled:       true,
+		FirstCooldownSeconds:  10,
+		SecondCooldownSeconds: 30,
+		ThirdCooldownSeconds:  60,
+		StrikeWindowSeconds:   120,
+	})
+	settingRepo.data[SettingKeyRateLimit429CooldownSettings] = string(data)
+	strikeCache := &rateLimit429StrikeCacheStub{}
+
+	svc := NewRateLimitService(accountRepo, nil, &config.Config{}, nil, nil)
+	svc.SetSettingService(NewSettingService(settingRepo, &config.Config{}))
+	svc.SetRateLimit429StrikeCache(strikeCache)
+	before := time.Now()
+	svc.handle429(context.Background(), &Account{ID: 61, Platform: PlatformAnthropic, Type: AccountTypeOAuth}, http.Header{}, []byte(`{"error":{"message":"Extra usage required"}}`))
+	after := time.Now()
+
+	require.Zero(t, strikeCache.registerCalls)
 	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(12*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(12*time.Second)))
 }
 

@@ -3,9 +3,23 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
+
+type openAI429StrikeResetStub struct {
+	resetIDs []int64
+}
+
+func (s *openAI429StrikeResetStub) RegisterRateLimit429Strike(context.Context, int64, time.Duration, time.Duration, time.Duration, time.Duration) (*RateLimit429StrikeDecision, error) {
+	return nil, nil
+}
+
+func (s *openAI429StrikeResetStub) ResetRateLimit429Strike(_ context.Context, accountID int64) error {
+	s.resetIDs = append(s.resetIDs, accountID)
+	return nil
+}
 
 type openAI403CounterResetStub struct {
 	resetCalls []int64
@@ -22,8 +36,10 @@ func (s *openAI403CounterResetStub) ResetOpenAI403Count(_ context.Context, accou
 
 func TestOpenAIGatewayServiceRecordUsage_ResetsOpenAI403CounterForZeroUsage(t *testing.T) {
 	counter := &openAI403CounterResetStub{}
+	strikeCounter := &openAI429StrikeResetStub{}
 	rateLimitSvc := NewRateLimitService(nil, nil, nil, nil, nil)
 	rateLimitSvc.SetOpenAI403CounterCache(counter)
+	rateLimitSvc.SetRateLimit429StrikeCache(strikeCounter)
 
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
@@ -44,5 +60,6 @@ func TestOpenAIGatewayServiceRecordUsage_ResetsOpenAI403CounterForZeroUsage(t *t
 
 	require.NoError(t, err)
 	require.Equal(t, []int64{777}, counter.resetCalls)
+	require.Equal(t, []int64{777}, strikeCounter.resetIDs)
 	require.Equal(t, 1, usageRepo.calls)
 }
