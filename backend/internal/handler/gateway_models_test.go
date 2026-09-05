@@ -1145,7 +1145,7 @@ func TestGatewayModels_CustomModelsListFiltersDefaultFallbackModels(t *testing.T
 			Platform: service.PlatformOpenAI,
 			ModelsListConfig: service.GroupModelsListConfig{
 				Enabled: true,
-				Models:  []string{"gpt-5.5", "legacy-gpt-2024", "gpt-5.4"},
+				Models:  []string{"gpt-5.5", "legacy-gpt-2024", "gpt-5.6-sol"},
 			},
 		},
 	})
@@ -1156,7 +1156,7 @@ func TestGatewayModels_CustomModelsListFiltersDefaultFallbackModels(t *testing.T
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gpt-5.5", "gpt-5.4"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"gpt-5.5", "gpt-5.6-sol"}, modelIDsForTest(got.Data))
 }
 
 func TestGatewayModels_OpenAICustomModelsListKeepsOpenAIResponseShapeForDefaultFallback(t *testing.T) {
@@ -1182,7 +1182,7 @@ func TestGatewayModels_OpenAICustomModelsListKeepsOpenAIResponseShapeForDefaultF
 			Platform: service.PlatformOpenAI,
 			ModelsListConfig: service.GroupModelsListConfig{
 				Enabled: true,
-				Models:  []string{"gpt-5.5", "gpt-5.4"},
+				Models:  []string{"gpt-5.5", "gpt-5.6-sol"},
 			},
 		},
 	})
@@ -1193,7 +1193,7 @@ func TestGatewayModels_OpenAICustomModelsListKeepsOpenAIResponseShapeForDefaultF
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gpt-5.5", "gpt-5.4"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"gpt-5.5", "gpt-5.6-sol"}, modelIDsForTest(got.Data))
 	require.Equal(t, "model", got.Data[0].Object)
 	require.NotZero(t, got.Data[0].Created)
 	require.Equal(t, "openai", got.Data[0].OwnedBy)

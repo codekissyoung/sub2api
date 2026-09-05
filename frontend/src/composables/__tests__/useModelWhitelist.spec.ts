@@ -7,14 +7,26 @@ vi.mock('@/api/admin/accounts', () => ({
 import { buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
-  it('openai 模型列表包含 GPT-5.4 官方快照', () => {
+  it('openai 模型列表与后端默认模型保持一致', () => {
     const models = getModelsByPlatform('openai')
 
-    expect(models).toContain('gpt-5.4')
-    expect(models).toContain('gpt-5.4-mini')
-    expect(models).toContain('gpt-5.4-2026-03-05')
-    expect(models).toContain('codex-auto-review')
     expect(models).toContain('gpt-5.6')
+    expect(models).toContain('gpt-5.6-sol')
+    expect(models).toContain('gpt-5.6-terra')
+    expect(models).toContain('gpt-5.6-luna')
+    expect(models).toContain('gpt-6')
+    expect(models).toContain('gpt-6-astra')
+    expect(models).toContain('gpt-5.5')
+    expect(models).toContain('codex-auto-review')
+    expect(models).toContain('gpt-image-2')
+
+    // 已下线的模型不再暴露
+    expect(models).not.toContain('gpt-5.4')
+    expect(models).not.toContain('gpt-5.4-mini')
+    expect(models).not.toContain('gpt-5.2')
+    expect(models).not.toContain('gpt-5.3-codex-spark')
+    expect(models).not.toContain('gpt-image-1')
+    expect(models).not.toContain('gpt-image-1.5')
   })
 
   it('openai 模型列表不再暴露已下线的 ChatGPT 登录 Codex 模型', () => {
