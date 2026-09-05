@@ -182,6 +182,24 @@ func TestApplyModelSpecificPricingPolicy_EnforcesOpenAIFastRatios(t *testing.T) 
 		}
 	})
 
+	t.Run("gpt-6-astra keeps 2x and derives cache write", func(t *testing.T) {
+		for _, model := range []string{"gpt-6-astra", "gpt-6", "gpt-6-astra-max"} {
+			got := svc.applyModelSpecificPricingPolicy(model, &ModelPricing{
+				InputPricePerToken:             10e-6,
+				InputPricePerTokenPriority:     20e-6,
+				OutputPricePerToken:            50e-6,
+				OutputPricePerTokenPriority:    100e-6,
+				CacheReadPricePerToken:         1e-6,
+				CacheReadPricePerTokenPriority: 2e-6,
+			})
+			require.InDelta(t, 20e-6, got.InputPricePerTokenPriority, 1e-12, "model %s", model)
+			require.InDelta(t, 100e-6, got.OutputPricePerTokenPriority, 1e-12, "model %s", model)
+			// 缓存写缺省时按输入价 1.25x 推导（与 5.6 同策略）。
+			require.InDelta(t, 12.5e-6, got.CacheCreationPricePerToken, 1e-12, "model %s", model)
+			require.InDelta(t, 25e-6, got.CacheCreationPricePerTokenPriority, 1e-12, "model %s", model)
+		}
+	})
+
 	t.Run("missing priority prices are backfilled from standard", func(t *testing.T) {
 		got := svc.applyModelSpecificPricingPolicy("gpt-5.5", &ModelPricing{
 			InputPricePerToken:         5e-6,

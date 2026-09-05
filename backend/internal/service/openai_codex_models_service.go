@@ -311,6 +311,7 @@ const (
 	configuredCodexGrokContext         = 500_000
 	configuredCodexGrokBuildContext    = 256_000
 	configuredCodexGPT56MaxContext     = 872_000
+	configuredCodexGPT6AstraMaxContext = 1_050_000
 	configuredCodexToolOutputMaxTokens = 10_000
 )
 
@@ -490,6 +491,9 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 			if isOpenAIGPT56Model(modelID) {
 				descriptor.MaxContextWindow = configuredCodexGPT56MaxContext
 			}
+			if isOpenAIGPT6AstraModel(modelID) {
+				descriptor.MaxContextWindow = configuredCodexGPT6AstraMaxContext
+			}
 		}
 		if SupportsVerbosity(modelID) {
 			defaultVerbosity := "low"
@@ -503,7 +507,7 @@ func newConfiguredCodexModelDescriptor(modelID string) configuredCodexModelDescr
 
 func configuredCodexSupportsPriorityServiceTier(modelID string) bool {
 	normalized := canonicalizeOpenAIModelAliasSpelling(modelID)
-	for _, family := range []string{"gpt-5.4", "gpt-5.5", "gpt-5.6"} {
+	for _, family := range []string{"gpt-5.4", "gpt-5.5", "gpt-5.6", "gpt-6"} {
 		if normalized == family || strings.HasPrefix(normalized, family+"-") {
 			return true
 		}
@@ -567,7 +571,7 @@ func configuredCodexGPTReasoningLevels(modelID string) []configuredCodexReasonin
 		{Effort: "xhigh", Description: "Extra-high reasoning depth for difficult tasks"},
 	}
 	normalized := getNormalizedCodexModel(modelID)
-	if isOpenAIGPT56Model(modelID) {
+	if isOpenAIGPT56Model(modelID) || isOpenAIGPT6AstraModel(modelID) {
 		levels = append(levels, configuredCodexReasoningLevel{
 			Effort:      "max",
 			Description: "Maximum reasoning depth for complex tasks",
@@ -1834,6 +1838,7 @@ func CodexModelsManifestETag(body []byte) string {
 }
 
 var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
+	"gpt-6-astra":   {},
 	"gpt-5.6-sol":   {},
 	"gpt-5.6-terra": {},
 	"gpt-5.6-luna":  {},
