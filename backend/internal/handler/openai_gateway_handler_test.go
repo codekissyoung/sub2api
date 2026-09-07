@@ -2430,7 +2430,9 @@ func TestOpenAIResponses_APIKeyPassthroughPoolAuthFailureRetriesThenSwitchesToHe
 	}
 }
 
-func TestOpenAIResponses_APIKeyPassthroughSSERateLimitUsesConfiguredPoolRetry(t *testing.T) {
+// 429/503 按 openAIPoolFailoverSkipsSameAccountRetry 直接换号、不再同号重试；
+// 本用例只剩单账号，因此期望只打一次上游后把 429 透传给客户端。
+func TestOpenAIResponses_APIKeyPassthroughSSERateLimitSwitchesWithoutSameAccountRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	groupID := int64(4204)
 	accounts := []service.Account{
@@ -2505,7 +2507,7 @@ func TestOpenAIResponses_APIKeyPassthroughSSERateLimitUsesConfiguredPoolRetry(t 
 
 	h.Responses(c)
 
-	require.Equal(t, []int64{9912, 9912}, upstream.calls())
+	require.Equal(t, []int64{9912}, upstream.calls(), "429 不再消耗 pool_mode_retry_count 做同号重试")
 	require.Equal(t, http.StatusTooManyRequests, rec.Code)
 	require.Equal(t, "1", rec.Header().Get("Retry-After"))
 	require.Equal(t, "rate_limit_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())

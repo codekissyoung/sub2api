@@ -367,8 +367,10 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					// Pool mode: retry on the same account
-					if failoverErr.RetryableOnSameAccount {
+					// Pool mode: retry on the same account (429/503 skip it —
+					// limits are per-account and overload persists, so waiting
+					// on the same account only adds latency)
+					if failoverErr.RetryableOnSameAccount && !openAIPoolFailoverSkipsSameAccountRetry(failoverErr) {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++

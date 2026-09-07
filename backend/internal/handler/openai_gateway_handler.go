@@ -918,8 +918,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
+					// 池模式：同账号重试（429/503 跳过——限流按号生效、过载持续数十秒，同号等待只加延迟）
+					if failoverErr.RetryableOnSameAccount && !openAIPoolFailoverSkipsSameAccountRetry(failoverErr) {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++
@@ -1474,8 +1474,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
-					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
+					// 池模式：同账号重试（429/503 跳过——限流按号生效、过载持续数十秒，同号等待只加延迟）
+					if failoverErr.RetryableOnSameAccount && !openAIPoolFailoverSkipsSameAccountRetry(failoverErr) {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++

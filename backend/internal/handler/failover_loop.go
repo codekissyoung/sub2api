@@ -121,6 +121,21 @@ func effectiveSameAccountRetryLimit(failoverErr *service.UpstreamFailoverError, 
 	return limit
 }
 
+// openAIPoolFailoverSkipsSameAccountRetry reports whether a pool-mode failover
+// error should switch accounts immediately instead of sleeping and retrying
+// the same account:
+//   - 429: per-account rate/concurrency limits are scoped to the account, so
+//     waiting on the same account only adds latency;
+//   - 503: provider capacity overload persists for seconds to minutes, so a
+//     same-account backoff retry usually hits the same overloaded slice again.
+func openAIPoolFailoverSkipsSameAccountRetry(failoverErr *service.UpstreamFailoverError) bool {
+	if failoverErr == nil {
+		return false
+	}
+	return failoverErr.StatusCode == http.StatusTooManyRequests ||
+		failoverErr.StatusCode == http.StatusServiceUnavailable
+}
+
 // FailoverState 跨循环迭代共享的 failover 状态
 type FailoverState struct {
 	SwitchCount           int

@@ -114,6 +114,28 @@ func TestEffectiveSameAccountRetryLimitHonorsErrorCapAndDisabledAccount(t *testi
 	require.Equal(t, 0, effectiveSameAccountRetryLimit(&service.UpstreamFailoverError{SameAccountRetryMax: 1}, account))
 }
 
+func TestOpenAIPoolFailoverSkipsSameAccountRetry(t *testing.T) {
+	require.False(t, openAIPoolFailoverSkipsSameAccountRetry(nil))
+
+	// 429/503 即使标记了同号可重试（含 OAuth 429 的 deadline 窗口）也必须直接换号。
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		err := &service.UpstreamFailoverError{
+			StatusCode:               status,
+			RetryableOnSameAccount:   true,
+			SameAccountRetryDeadline: time.Now().Add(time.Minute),
+		}
+		require.True(t, openAIPoolFailoverSkipsSameAccountRetry(err), "status=%d", status)
+		require.True(t, sameAccountRetryAllowed(err, 0, maxSameAccountRetries),
+			"谓词不改变底层重试许可，只在使用点跳过，status=%d", status)
+	}
+
+	// 其他可重试错误（如 408/500 或流内瞬时错误）保持同号重试。
+	for _, status := range []int{http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway} {
+		err := &service.UpstreamFailoverError{StatusCode: status, RetryableOnSameAccount: true}
+		require.False(t, openAIPoolFailoverSkipsSameAccountRetry(err), "status=%d", status)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
