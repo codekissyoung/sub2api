@@ -476,3 +476,44 @@ func TestAccountHandlerListIncludesCost30d(t *testing.T) {
 	require.InEpsilon(t, 123.45, costByID[401], 1e-9)
 	require.Zero(t, costByID[402], "无用量账号应返回 0")
 }
+
+func TestAccountHandlerListLiteIncludesCost30d(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	adminSvc := newStubAdminService()
+	now := time.Now().UTC()
+	adminSvc.accounts = []service.Account{
+		{
+			ID:          401,
+			Name:        "account-with-cost",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	}
+	usageRepo := &cost30dUsageLogRepoStub{costs: map[int64]float64{401: 123.45}}
+	accountUsageSvc := service.NewAccountUsageService(nil, usageRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	handler := NewAccountHandler(adminSvc, nil, nil, nil, nil, nil, nil, accountUsageSvc, nil, nil, nil, nil, nil, nil)
+	router.GET("/api/v1/admin/accounts", handler.List)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts?page=1&page_size=20&lite=1", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var payload struct {
+		Data struct {
+			Items []struct {
+				ID      int64   `json:"id"`
+				Cost30d float64 `json:"cost_30d"`
+			} `json:"items"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	require.Len(t, payload.Data.Items, 1)
+	require.InEpsilon(t, 123.45, payload.Data.Items[0].Cost30d, 1e-9, "lite=1 紧凑响应必须保留 cost_30d")
+}
