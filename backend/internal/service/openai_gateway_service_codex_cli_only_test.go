@@ -356,9 +356,9 @@ func TestShouldFailoverOpenAIUpstreamResponseContextWindow502(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	body := []byte(`{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again.","type":"upstream_error","code":null}}`)
 
-	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "", body))
-	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "temporary upstream outage", []byte(`{"error":{"message":"temporary upstream outage"}}`)))
-	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusBadGateway, "", body))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusBadGateway, "temporary upstream outage", []byte(`{"error":{"message":"temporary upstream outage"}}`)))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(),
 		http.StatusBadGateway,
 		"temporary upstream outage",
 		[]byte(`{"error":{"message":"temporary upstream outage"},"echo":"context_length_exceeded"}`),
@@ -369,7 +369,7 @@ func TestShouldFailoverOpenAIUpstreamResponseRequestTimeout(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	body := []byte(`{"detail":"Request body read timed out"}`)
 
-	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusRequestTimeout, "Request body read timed out", body))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusRequestTimeout, "Request body read timed out", body))
 }
 
 func TestOpenAIGatewayService_Forward_LogsInstructionsRequiredDetails(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 )
 
 const (
+	codexSessionIDHeader          = "Session-Id"
 	openCodeSessionAffinityHeader = "X-Session-Affinity"
 	openCodeSessionIDHeader       = "X-Session-Id"
 	openCodeNativeSessionHeader   = "X-OpenCode-Session"
@@ -28,7 +29,7 @@ const (
 )
 
 var explicitOpenAIHeaderSessionNames = []string{
-	"session-id",
+	codexSessionIDHeader,
 	"session_id",
 	"conversation_id",
 	openCodeSessionAffinityHeader,
@@ -293,7 +294,7 @@ func (s *OpenAIGatewayService) SelectAccountForTokenCount(
 // handler 调度入口仍需导出，保持导出名。）
 func NormalizeOpenAICompatiblePlatform(platform string) string {
 	switch platform {
-	case PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek:
+	case PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		return platform
 	default:
 		return PlatformOpenAI
