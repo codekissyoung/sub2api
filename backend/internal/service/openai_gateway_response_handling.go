@@ -514,6 +514,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				openAIStreamClientOutputStarted(c, clientOutputStarted) &&
 				isOpenAIUpstreamCapacityShedEvent(dataBytes) {
 				logOpenAICapacityFailoverSuppressed(ctx, account, "native_sse", upstreamRequestID, eventType)
+				s.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(ctx, account, "native_sse")
 				capacityFailoverSuppressedLogged = true
 			}
 			cyberHit := false

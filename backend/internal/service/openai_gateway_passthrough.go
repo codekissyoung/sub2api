@@ -1328,6 +1328,26 @@ func logOpenAICapacityFailoverSuppressed(
 	logger.FromContext(ctx).Warn("gateway.failover_suppressed_after_semantic_output", fields...)
 }
 
+// avoidOpenAIPoolAccountAfterMidStreamCapacityShed 在 mid-stream 过载（post-output
+// capacity shed）后给 OpenAI pool 账号施加短时间的调度避让。此时响应已开始语义输出，
+// 请求无法再 failover；若不做任何账号级避让，风暴期同一批账号会被反复选中并反复
+// mid-stream 降载。避让走 pool 自己的内存 runtime block 通道（调度器候选过滤的
+// runtime_blocked 分支，到期自动恢复，重复触发只延长不缩短），不动全局 529
+// overload 冷却（pool 账号本就跳过），也不改 pre-output 过载的请求级 failover 语义。
+func (s *OpenAIGatewayService) avoidOpenAIPoolAccountAfterMidStreamCapacityShed(ctx context.Context, account *Account, path string) {
+	if s == nil || account == nil || account.Platform != PlatformOpenAI || !account.IsPoolMode() {
+		return
+	}
+	until := time.Now().Add(openAIPoolMidStreamCapacityShedCooldown)
+	s.BlockAccountScheduling(account, until, "midstream_capacity_shed")
+	logger.FromContext(ctx).Warn("openai.pool_midstream_capacity_shed_account_avoided",
+		zap.Int64("account_id", account.ID),
+		zap.String("path", strings.TrimSpace(path)),
+		zap.Duration("cooldown", openAIPoolMidStreamCapacityShedCooldown),
+		zap.Time("blocked_until", until),
+	)
+}
+
 // openAICapacityShedRetryableClientCode 是把上游容量降载错误转发给客户端时改写
 // 使用的错误码。Codex CLI 按闭集对错误码分类：server_is_overloaded / slow_down
 // 被判为致命错误（客户端提示 "Selected model is at capacity. Please try a
@@ -2033,6 +2053,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				openAIStreamClientOutputStarted(c, clientOutputStarted) &&
 				isOpenAIUpstreamCapacityShedEvent(dataBytes) {
 				logOpenAICapacityFailoverSuppressed(ctx, account, "passthrough_sse", upstreamRequestID, eventType)
+				s.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(ctx, account, "passthrough_sse")
 				capacityFailoverSuppressedLogged = true
 			}
 			cyberHit := false

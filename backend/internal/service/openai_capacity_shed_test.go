@@ -408,3 +408,168 @@ func TestCodexOutboundVersionHasSingleSource(t *testing.T) {
 		"codexCLIVersion=%q 不得低于上游最低门槛 %q", codexCLIVersion, codexUpstreamMinVersion,
 	)
 }
+
+// mid-stream（post-output）过载的 pool 账号短避让：helper 门控语义——只有
+// OpenAI 平台的 pool 账号被避让，非 pool / 非 OpenAI / nil 一律 no-op。
+func TestAvoidOpenAIPoolAccountAfterMidStreamCapacityShed(t *testing.T) {
+	newSvc := func() *OpenAIGatewayService { return &OpenAIGatewayService{} }
+	poolAccount := func(id int64) *Account {
+		return &Account{
+			ID:          id,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Name:        "pool-acc",
+			Credentials: map[string]any{"pool_mode": true},
+		}
+	}
+
+	t.Run("pool账号被短时间避让", func(t *testing.T) {
+		svc := newSvc()
+		account := poolAccount(6101)
+		svc.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(context.Background(), account, "native_sse")
+
+		require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+		value, ok := svc.openaiAccountRuntimeBlockUntil.Load(account.ID)
+		require.True(t, ok)
+		until, ok := value.(time.Time)
+		require.True(t, ok)
+		require.WithinDuration(t, time.Now().Add(openAIPoolMidStreamCapacityShedCooldown), until, 5*time.Second)
+	})
+
+	t.Run("重复触发只延长不缩短", func(t *testing.T) {
+		svc := newSvc()
+		account := poolAccount(6102)
+		svc.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(context.Background(), account, "native_sse")
+		first, _ := svc.openaiAccountRuntimeBlockUntil.Load(account.ID)
+		svc.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(context.Background(), account, "passthrough_sse")
+		second, _ := svc.openaiAccountRuntimeBlockUntil.Load(account.ID)
+		require.False(t, second.(time.Time).Before(first.(time.Time)))
+	})
+
+	t.Run("非pool账号不受影响", func(t *testing.T) {
+		svc := newSvc()
+		account := &Account{ID: 6103, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Name: "plain-acc"}
+		svc.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(context.Background(), account, "native_sse")
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+
+	t.Run("非OpenAI平台不受影响", func(t *testing.T) {
+		svc := newSvc()
+		account := &Account{
+			ID:          6104,
+			Platform:    PlatformGrok,
+			Type:        AccountTypeAPIKey,
+			Name:        "grok-pool-acc",
+			Credentials: map[string]any{"pool_mode": true},
+		}
+		svc.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(context.Background(), account, "native_sse")
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	})
+
+	t.Run("nil账号与nil服务安全返回", func(t *testing.T) {
+		svc := newSvc()
+		svc.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(context.Background(), nil, "native_sse")
+		var nilSvc *OpenAIGatewayService
+		nilSvc.avoidOpenAIPoolAccountAfterMidStreamCapacityShed(context.Background(), poolAccount(6105), "native_sse")
+	})
+}
+
+// 流中途（已有真实输出）过载：pool 账号被短时间避让，同时保持既有的客户端改写语义
+// （降载码改写为 server_error，内容前缀不丢）。pre-output 过载与非过载 mid-stream
+// 错误不得触发避让。
+func TestOpenAIStreamMidStreamCapacityShedAvoidsPoolAccount(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newPoolAccount := func(id int64) *Account {
+		return &Account{
+			ID:          id,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Name:        "pool-acc",
+			Credentials: map[string]any{"pool_mode": true},
+		}
+	}
+	newSvcAndContext := func() (*OpenAIGatewayService, *gin.Context) {
+		svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}}
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+		return svc, c
+	}
+	streamOf := func(events ...string) *http.Response {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader(strings.Join(events, "\n"))),
+			Header:     http.Header{"X-Request-Id": []string{"rid-midstream-shed-pool"}},
+		}
+	}
+
+	t.Run("post-output过载触发短避让", func(t *testing.T) {
+		svc, c := newSvcAndContext()
+		account := newPoolAccount(6111)
+		resp := streamOf(
+			"event: response.created",
+			`data: {"type":"response.created","response":{"id":"resp_1"}}`,
+			"",
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"partial"}`,
+			"",
+			"event: error",
+			`data: {"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."},"sequence_number":2}`,
+			"",
+			"event: response.failed",
+			`data: {"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}},"sequence_number":3}`,
+			"",
+		)
+
+		_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+		require.Error(t, err)
+		// 已提交语义输出，不能 failover；账号进入短避让。
+		var failoverErr *UpstreamFailoverError
+		require.False(t, errors.As(err, &failoverErr))
+		require.True(t, svc.isOpenAIAccountRuntimeBlocked(account), "post-output 过载后 pool 账号应被短时间避让")
+	})
+
+	t.Run("pre-output过载保持请求级failover且不避让账号", func(t *testing.T) {
+		svc, c := newSvcAndContext()
+		account := newPoolAccount(6112)
+		resp := streamOf(
+			"event: response.created",
+			`data: {"type":"response.created","response":{"id":"resp_1"},"sequence_number":0}`,
+			"",
+			"event: error",
+			`data: {"type":"error","error":{"type":"service_unavailable_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."},"sequence_number":2}`,
+			"",
+			"event: response.failed",
+			`data: {"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}},"sequence_number":3}`,
+			"",
+		)
+
+		_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+		require.Error(t, err)
+		var failoverErr *UpstreamFailoverError
+		require.ErrorAs(t, err, &failoverErr)
+		require.True(t, failoverErr.RequestScopedTransient)
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "pre-output 过载不得触发账号避让")
+	})
+
+	t.Run("非过载的mid-stream错误不触发避让", func(t *testing.T) {
+		svc, c := newSvcAndContext()
+		account := newPoolAccount(6113)
+		resp := streamOf(
+			"event: response.created",
+			`data: {"type":"response.created","response":{"id":"resp_1"}}`,
+			"",
+			"event: response.output_text.delta",
+			`data: {"type":"response.output_text.delta","delta":"partial"}`,
+			"",
+			"event: response.failed",
+			`data: {"type":"response.failed","response":{"id":"resp_1","status":"failed","error":{"code":"server_error","message":"boom"}},"sequence_number":2}`,
+			"",
+		)
+
+		_, err := svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "model", "model")
+		require.Error(t, err)
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account), "非过载 mid-stream 错误不得触发账号避让")
+	})
+}

@@ -19,6 +19,11 @@ const (
 	openAIStopSchedulingBridgeCooldown    = 2 * time.Minute
 	openAIOAuth429StormWindow             = 10 * time.Second
 	openAIOAuth429StormMaxAccountSwitches = 1
+	// openAIPoolMidStreamCapacityShedCooldown 是 mid-stream（已开始语义输出后）
+	// 容量降载的账号级短避让时长。账号能开始输出说明它部分可用，不适用 10 分钟级
+	// 全局 overload 冷却；但风暴期它大概率会再次降载，短暂避让让后续请求先在
+	// 池内其他账号间轮转，到期自动恢复。
+	openAIPoolMidStreamCapacityShedCooldown = 75 * time.Second
 )
 
 // OpenAIOAuth429FailoverState tracks the request-local follow-up budget after
