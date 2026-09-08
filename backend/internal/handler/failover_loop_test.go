@@ -136,6 +136,66 @@ func TestOpenAIPoolFailoverSkipsSameAccountRetry(t *testing.T) {
 	}
 }
 
+func TestOpenAIPoolOverloadFailoverExhausted(t *testing.T) {
+	overloadBody := []byte(`{"error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}`)
+	streamShedBody := []byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`)
+
+	// nil 错误与 nil 计数器不计数。
+	require.False(t, openAIPoolOverloadFailoverExhausted(nil, new(int)))
+	require.False(t, openAIPoolOverloadFailoverExhausted(&service.UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable, ResponseBody: overloadBody}, nil))
+
+	// HTTP 503 + 过载 body（构造期分型 RequestScopedTransient）：第一次不计数返回 false，
+	// 第二次（换号后仍过载）返回 true 触发耗尽。
+	httpShed := &service.UpstreamFailoverError{
+		StatusCode:             http.StatusServiceUnavailable,
+		RequestScopedTransient: true,
+		RetryableOnSameAccount: true,
+		ResponseBody:           overloadBody,
+	}
+	count := 0
+	require.False(t, openAIPoolOverloadFailoverExhausted(httpShed, &count))
+	require.Equal(t, 1, count)
+	require.True(t, openAIPoolOverloadFailoverExhausted(httpShed, &count))
+	require.Equal(t, 1, count, "耗尽后计数不再增长")
+
+	// 流内 response.failed server_is_overloaded（HTTP 200 承载，service 层归类 503）。
+	streamShed := &service.UpstreamFailoverError{
+		StatusCode:             http.StatusServiceUnavailable,
+		RequestScopedTransient: true,
+		RetryableOnSameAccount: true,
+		ResponseBody:           streamShedBody,
+	}
+	count = 0
+	require.False(t, openAIPoolOverloadFailoverExhausted(streamShed, &count))
+	require.True(t, openAIPoolOverloadFailoverExhausted(streamShed, &count))
+
+	// 未走分型构造器的裸 503 + 过载 body 仍按过载计数。
+	bare503 := &service.UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable, ResponseBody: overloadBody}
+	count = 0
+	require.False(t, openAIPoolOverloadFailoverExhausted(bare503, &count))
+	require.True(t, openAIPoolOverloadFailoverExhausted(bare503, &count))
+
+	// 非过载 503（普通 server_error，无过载特征）不计数。
+	plain503 := &service.UpstreamFailoverError{
+		StatusCode:   http.StatusServiceUnavailable,
+		ResponseBody: []byte(`{"error":{"type":"server_error","message":"boom"}}`),
+	}
+	count = 0
+	require.False(t, openAIPoolOverloadFailoverExhausted(plain503, &count))
+	require.False(t, openAIPoolOverloadFailoverExhausted(plain503, &count))
+	require.Zero(t, count)
+
+	// 非过载错误不消耗预算：中间夹杂 500/超时/401 不影响过载计数推进；
+	// 正常天气（过载一次后换号成功）永远不会触发 cap。
+	count = 0
+	require.False(t, openAIPoolOverloadFailoverExhausted(httpShed, &count)) // 账号 A 过载，换号
+	for _, status := range []int{http.StatusInternalServerError, http.StatusGatewayTimeout, http.StatusUnauthorized, http.StatusTooManyRequests} {
+		require.False(t, openAIPoolOverloadFailoverExhausted(&service.UpstreamFailoverError{StatusCode: status}, &count), "status=%d", status)
+	}
+	require.Equal(t, 1, count)
+	require.True(t, openAIPoolOverloadFailoverExhausted(streamShed, &count)) // 账号 B 过载，耗尽
+}
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------

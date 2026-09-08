@@ -157,6 +157,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
+	overloadSwitchCount := 0
 	profitVetoCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
@@ -393,6 +394,17 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
+					// 全池过载风暴快速失败：连续两个账号都返回过载类失败时立即耗尽，
+					// 503 交还外层 relay 换池，不再消耗剩余换号预算干等。
+					if openAIPoolOverloadFailoverExhausted(failoverErr, &overloadSwitchCount) {
+						reqLog.Warn("openai_chat_completions.pool_overload_failover_exhausted",
+							zap.Int64("account_id", account.ID),
+							zap.Int("upstream_status", failoverErr.StatusCode),
+							zap.Int("overload_switch_count", overloadSwitchCount),
+						)
+						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						return
+					}
 					if switchCount >= maxAccountSwitches {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return

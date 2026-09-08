@@ -435,6 +435,20 @@ func (e *UpstreamFailoverError) IsOpenAICapacityShed() bool {
 	return e != nil && e.RequestScopedTransient && isOpenAIRequestScopedCapacityShed("", e.ResponseBody)
 }
 
+// IsOpenAIOverload reports whether the failure carries a recognized provider
+// overload (capacity shed) signal: either the typed classification set at
+// construction time, or a 503 whose body/event payload matches the overload
+// signatures. Plain 5xx, timeouts, rate limits and auth failures never qualify.
+func (e *UpstreamFailoverError) IsOpenAIOverload() bool {
+	if e == nil {
+		return false
+	}
+	if e.IsOpenAICapacityShed() {
+		return true
+	}
+	return e.StatusCode == http.StatusServiceUnavailable && isOpenAIRequestScopedCapacityShed("", e.ResponseBody)
+}
+
 func marshalOpenAIUpstreamJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

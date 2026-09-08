@@ -136,6 +136,27 @@ func openAIPoolFailoverSkipsSameAccountRetry(failoverErr *service.UpstreamFailov
 		failoverErr.StatusCode == http.StatusServiceUnavailable
 }
 
+// maxOpenAIPoolOverloadSwitches 号池过载快速失败的换号预算：账号 A 过载后换 1 次号，
+// 若账号 B 仍返回过载类失败（连续两个账号都过载说明全池都在降载，继续换号无意义），
+// 立即按耗尽返回。配合 handleFailoverExhausted 的 IsOpenAICapacityShed 分支，
+// 客户端拿到 503/server_error，外层 relay 可用剩余首字节预算改投其他池/第三方。
+const maxOpenAIPoolOverloadSwitches = 1
+
+// openAIPoolOverloadFailoverExhausted 统计请求内的过载类（capacity shed）失败次数：
+// 仅过载信号计数（普通 500/超时/401 等不消耗预算），达到 maxOpenAIPoolOverloadSwitches
+// 即返回 true，调用方应走 handleFailoverExhausted 终止，不再消耗通用换号预算。
+// 计数器是请求级局部变量；单次过载后换号成功的正常天气不受影响。
+func openAIPoolOverloadFailoverExhausted(failoverErr *service.UpstreamFailoverError, overloadSwitchCount *int) bool {
+	if failoverErr == nil || overloadSwitchCount == nil || !failoverErr.IsOpenAIOverload() {
+		return false
+	}
+	if *overloadSwitchCount >= maxOpenAIPoolOverloadSwitches {
+		return true
+	}
+	*overloadSwitchCount = *overloadSwitchCount + 1
+	return false
+}
+
 // FailoverState 跨循环迭代共享的 failover 状态
 type FailoverState struct {
 	SwitchCount           int

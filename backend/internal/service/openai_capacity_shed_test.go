@@ -108,6 +108,40 @@ func TestOpenAIHTTPCapacityShedIsRequestScopedForOAuthAccounts(t *testing.T) {
 	require.Zero(t, repo.tempUnschedCalls)
 }
 
+// IsOpenAIOverload 是号池过载快速失败（maxOpenAIPoolOverloadSwitches）的判定口径：
+// 只认降载信号——构造期分型（RequestScopedTransient）或 503 + body/事件过载特征；
+// 普通 5xx、超时、限流、鉴权错误一律不算，避免风暴期以外误杀正常换号。
+func TestUpstreamFailoverErrorIsOpenAIOverload(t *testing.T) {
+	overloadBody := []byte(`{"error":{"type":"server_error","code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}`)
+
+	require.False(t, (*UpstreamFailoverError)(nil).IsOpenAIOverload())
+
+	// 构造期分型：HTTP 503 + 过载 body。
+	typed := newOpenAIUpstreamFailoverError(http.StatusServiceUnavailable, nil, overloadBody, "Our servers are currently overloaded. Please try again later.", false)
+	require.True(t, typed.RequestScopedTransient)
+	require.True(t, typed.IsOpenAIOverload())
+
+	// 构造期分型：流内 response.failed server_is_overloaded（HTTP 200 承载）。
+	streamTyped := newOpenAIUpstreamFailoverError(http.StatusOK, nil,
+		[]byte(`{"type":"response.failed","response":{"error":{"code":"server_is_overloaded","message":"Our servers are currently overloaded. Please try again later."}}}`),
+		"Our servers are currently overloaded. Please try again later.", false)
+	require.True(t, streamTyped.RequestScopedTransient)
+	require.True(t, streamTyped.IsOpenAIOverload())
+
+	// 未走分型构造器的裸 503 + 过载 body 仍识别为过载。
+	require.True(t, (&UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable, ResponseBody: overloadBody}).IsOpenAIOverload())
+
+	// 非 503 的裸错误即使 body 撞过载文案也不算过载（限流/普通 5xx 换号仍有意义）。
+	require.False(t, (&UpstreamFailoverError{StatusCode: http.StatusTooManyRequests, ResponseBody: overloadBody}).IsOpenAIOverload())
+	require.False(t, (&UpstreamFailoverError{StatusCode: http.StatusInternalServerError, ResponseBody: overloadBody}).IsOpenAIOverload())
+
+	// 普通 503（无过载特征）、空 body 503、超时、鉴权错误均不算过载。
+	require.False(t, (&UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable, ResponseBody: []byte(`{"error":{"type":"server_error","message":"boom"}}`)}).IsOpenAIOverload())
+	require.False(t, (&UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable}).IsOpenAIOverload())
+	require.False(t, (&UpstreamFailoverError{StatusCode: http.StatusGatewayTimeout}).IsOpenAIOverload())
+	require.False(t, (&UpstreamFailoverError{StatusCode: http.StatusUnauthorized}).IsOpenAIOverload())
+}
+
 // 上游降载的真实序列是「event: error → event: response.failed」。error 帧不算
 // 客户端输出：若把它当首输出 flush，clientOutputStarted 被固化，随后的 failed
 // 事件就进不了 pre-output failover 分支，只能把致命错误原样转发给客户端。
