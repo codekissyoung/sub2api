@@ -238,7 +238,7 @@ func TestApplyCodexFingerprintHeaders_SessionMode(t *testing.T) {
 	assert.Equal(t, convergedSession, h.Get("session-id"))
 	assert.Equal(t, convergedSession, h.Get("session_id"), "下划线形式也应被改写")
 	assert.Equal(t, convergedThread, h.Get("thread-id"))
-	assert.Equal(t, convergedThread, h.Get("x-client-request-id"))
+	assert.Equal(t, "user-thread", h.Get("x-client-request-id"), "客户端的每请求随机值应透传，不得收敛成会话级常量")
 	assert.Equal(t, convergedThread+":0", h.Get("x-codex-window-id"))
 
 	var meta map[string]any
@@ -249,6 +249,33 @@ func TestApplyCodexFingerprintHeaders_SessionMode(t *testing.T) {
 	assert.NotEqual(t, "user-turn", meta["turn_id"], "turn_id 应被新生成的值替换")
 	assert.Equal(t, "seccomp", meta["sandbox"], "sandbox 保留原样")
 	assert.Equal(t, "user", meta["thread_source"], "thread_source 保留原样")
+}
+
+// --- session 模式：x-client-request-id 保持每请求随机（对齐 CPA identity hardening） ---
+
+func TestApplyCodexFingerprintHeaders_ClientRequestIDStaysPerRequest(t *testing.T) {
+	account := newTestOAuthAccount(1, map[string]any{
+		codexFingerprintModeExtraKey: "session",
+	})
+	clientHeaders := http.Header{}
+	clientHeaders.Set("session-id", "client-session-aaa")
+	ids := resolveCodexFingerprintIDsFromRequest(account, clientHeaders)
+	require.NotNil(t, ids)
+
+	// 客户端未携带：补一个全新的随机 UUID，且不得等于会话级 thread_id；
+	// 两次应用必须产生不同的值（每请求随机）。
+	h1 := http.Header{}
+	applyCodexFingerprintHeaders(h1, ids)
+	h2 := http.Header{}
+	applyCodexFingerprintHeaders(h2, ids)
+	v1 := h1.Get("x-client-request-id")
+	v2 := h2.Get("x-client-request-id")
+	assert.NotEmpty(t, v1)
+	assert.NotEmpty(t, v2)
+	_, err := uuid.Parse(v1)
+	assert.NoError(t, err)
+	assert.NotEqual(t, ids.threadID, v1, "不得塌缩到会话级 thread")
+	assert.NotEqual(t, v1, v2, "同一账号同一客户端会话的两次请求应得到不同的 x-client-request-id")
 }
 
 // --- session 模式：不同客户端得到不同 thread ---
@@ -885,7 +912,11 @@ func TestBuildUpstreamRequestOpenAIPassthrough_AppliesStagedFingerprint(t *testi
 	assert.Equal(t, ids.sessionID, req.Header.Get("session_id"), "session 模式下出站 session_id 应为账号级收敛值")
 	assert.Equal(t, ids.installationID, req.Header.Get("x-codex-installation-id"))
 	assert.Equal(t, ids.windowID, req.Header.Get("x-codex-window-id"))
-	assert.Equal(t, ids.threadID, req.Header.Get("x-client-request-id"))
+	clientRequestID := req.Header.Get("x-client-request-id")
+	assert.NotEqual(t, ids.threadID, clientRequestID, "x-client-request-id 应保持每请求随机，不得塌缩到会话级 thread")
+	assert.NotEmpty(t, clientRequestID, "客户端未携带时应补一个全新的随机值")
+	_, err = uuid.Parse(clientRequestID)
+	assert.NoError(t, err, "补发的 x-client-request-id 应为合法 UUID")
 	turnMetadata := req.Header.Get("x-codex-turn-metadata")
 	require.NotEmpty(t, turnMetadata)
 	assert.Contains(t, turnMetadata, ids.sessionID, "turn-metadata JSON 中的 session_id 应被收敛")

@@ -2168,7 +2168,7 @@ func TestOpenAIGatewayService_CodexFingerprintHTTPTransformedHeaderBodyParityAnd
 	require.Equal(t, wantSession, upstream.lastReq.Header.Get("session-id"))
 	require.Equal(t, wantSession, upstream.lastReq.Header.Get("session_id"))
 	require.Equal(t, wantThread, upstream.lastReq.Header.Get("thread-id"))
-	require.Equal(t, wantThread, upstream.lastReq.Header.Get("x-client-request-id"))
+	require.NotEqual(t, wantThread, upstream.lastReq.Header.Get("x-client-request-id"), "x-client-request-id 保持每请求随机，不塌缩到会话级 thread")
 	require.Equal(t, wantThread+":0", upstream.lastReq.Header.Get("x-codex-window-id"))
 
 	require.Equal(t, wantSession, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
@@ -2230,7 +2230,7 @@ func TestOpenAIGatewayService_CodexFingerprintHTTPRawPassthroughHeaderBodyParity
 	require.Equal(t, wantSession, upstream.lastReq.Header.Get("session-id"))
 	require.Equal(t, wantSession, upstream.lastReq.Header.Get("session_id"))
 	require.Equal(t, wantThread, upstream.lastReq.Header.Get("thread-id"))
-	require.Equal(t, wantThread, upstream.lastReq.Header.Get("x-client-request-id"))
+	require.NotEqual(t, wantThread, upstream.lastReq.Header.Get("x-client-request-id"), "x-client-request-id 保持每请求随机，不塌缩到会话级 thread")
 	require.Equal(t, wantThread+":0", upstream.lastReq.Header.Get("x-codex-window-id"))
 
 	require.Equal(t, wantSession, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())

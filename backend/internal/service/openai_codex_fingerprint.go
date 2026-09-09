@@ -371,7 +371,12 @@ func applyCodexFingerprintHeaders(h http.Header, ids *codexFingerprintIDs) {
 
 	// session / full 模式：改写所有相关头
 	h.Set("x-codex-window-id", ids.windowID)
-	h.Set("x-client-request-id", ids.threadID)
+	// x-client-request-id 在真实 Codex 客户端是每请求随机的；收敛成会话级常量
+	// 是真实客户端不可能产生的签名。与 CPA 的 identity hardening 对齐：客户端
+	// 带值则透传，缺失则补一个全新的随机值。
+	if strings.TrimSpace(h.Get("x-client-request-id")) == "" {
+		h.Set("x-client-request-id", uuid.NewString())
+	}
 	// 连字符形式和下划线形式都改写，保证一致
 	h.Set("session-id", ids.sessionID)
 	h.Set("session_id", ids.sessionID)
