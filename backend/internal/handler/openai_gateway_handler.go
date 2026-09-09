@@ -673,6 +673,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		}
 	}()
 
+	// 池账号钉选（内部头 X-Pool-Pin-Account，仅 gateway.allow_pool_pin_header +
+	// admin 生效）：命中时绕过调度器，failover 重试始终回到同一账号，保证测试
+	// 确定性；钉选不可用直接确定性失败，绝不回退调度。
+	pinnedSelection, pinnedHandled := h.tryPoolPinnedAccountSelection(c, reqLog)
+	if pinnedHandled && pinnedSelection == nil {
+		return
+	}
+
 	for {
 		// Streaming Forward intentionally detaches the upstream request so usage can
 		// be drained after a disconnect. Re-check the client context before every
@@ -681,21 +689,28 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			return
 		}
 		// Select account supporting the requested model
-		reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
-			apiKey.GroupID,
-			previousResponseID,
-			sessionHash,
-			forwardModel,
-			failedAccountIDs,
-			service.OpenAIUpstreamTransportAny,
-			requiredCapability,
-			requireCompact,
-			false,
-			!imageIntent,
-			requestPlatform,
-		)
+		var selection *service.AccountSelectionResult
+		var scheduleDecision service.OpenAIAccountScheduleDecision
+		var err error
+		if pinnedSelection != nil {
+			selection = pinnedSelection
+		} else {
+			reqLog.Debug("openai.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
+				c.Request.Context(),
+				apiKey.GroupID,
+				previousResponseID,
+				sessionHash,
+				forwardModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportAny,
+				requiredCapability,
+				requireCompact,
+				false,
+				!imageIntent,
+				requestPlatform,
+			)
+		}
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
@@ -768,11 +783,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Int64("account_id", account.ID),
 				zap.String("account_type", account.Type),
 			)
+			if pinnedSelection != nil {
+				// 钉选语义确定：同一账号会在下一轮被立即再次选中，这里的 continue
+				// 会构成无界重试；直接以本次错误确定性终止。
+				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
+				return
+			}
 			continue
 		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		setPoolAccountAttributionHeader(c, account.ID)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {

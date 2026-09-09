@@ -276,6 +276,12 @@ gateway:
   # 默认 false：保持纯文本 Codex 请求不被改写；客户端显式提供 image_generation tool 时，
   # 仍会在分组允许图片生成的情况下正常转发。
   codex_image_generation_bridge_enabled: false
+  # Allow admin requests to force a specific pooled OpenAI account via the internal
+  # X-Pool-Pin-Account header (testing/troubleshooting only). Default false; when
+  # disabled or the caller is not an admin the header is silently ignored.
+  # 允许 admin 请求经内部头 X-Pool-Pin-Account 强制指定池内 OpenAI 账号（仅用于
+  # 联调/排障）。默认 false；关闭或调用方非 admin 时静默忽略该头，走正常调度。
+  allow_pool_pin_header: false
   # Optional: template file used to build the final top-level Codex `instructions`.
   # 可选：用于构建最终 Codex 顶层 `instructions` 的模板文件路径。
   #

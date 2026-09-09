@@ -179,25 +179,39 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 	}()
 
+	// 池账号钉选（内部头 X-Pool-Pin-Account，仅 gateway.allow_pool_pin_header +
+	// admin 生效）：与 /responses 同语义，命中时绕过调度器并确定性失败。
+	pinnedSelection, pinnedHandled := h.tryPoolPinnedAccountSelection(c, reqLog)
+	if pinnedHandled && pinnedSelection == nil {
+		return
+	}
+
 	for {
 		if failoverClientGone(c) {
 			return
 		}
-		reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForCapability(
-			c.Request.Context(),
-			apiKey.GroupID,
-			"",
-			sessionHash,
-			forwardModel,
-			failedAccountIDs,
-			service.OpenAIUpstreamTransportAny,
-			service.OpenAIEndpointCapabilityChatCompletions,
-			false,
-			false,
-			true,
-			requestPlatform,
-		)
+		var selection *service.AccountSelectionResult
+		var scheduleDecision service.OpenAIAccountScheduleDecision
+		var err error
+		if pinnedSelection != nil {
+			selection = pinnedSelection
+		} else {
+			reqLog.Debug("openai_chat_completions.account_selecting", zap.Int("excluded_account_count", len(failedAccountIDs)))
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForCapability(
+				c.Request.Context(),
+				apiKey.GroupID,
+				"",
+				sessionHash,
+				forwardModel,
+				failedAccountIDs,
+				service.OpenAIUpstreamTransportAny,
+				service.OpenAIEndpointCapabilityChatCompletions,
+				false,
+				false,
+				true,
+				requestPlatform,
+			)
+		}
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai_chat_completions.account_select_aborted_client_disconnected", zap.Error(err))
@@ -237,6 +251,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		reqLog.Debug("openai_chat_completions.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		_ = scheduleDecision
 		setOpsSelectedAccount(c, account.ID, account.Platform)
+		setPoolAccountAttributionHeader(c, account.ID)
 
 		accountReleaseFunc, slotResult := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
 		if slotResult == openAISlotAcquireProfitVetoed {
