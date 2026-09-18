@@ -89,7 +89,6 @@ type openAIWSHandshakeCompatibilityKey struct {
 	sessionIDHyphen     string
 	sessionIDUnderscore string
 	threadID            string
-	clientRequestID     string
 	codexWindowID       string
 }
 
@@ -2376,7 +2375,9 @@ func normalizeOpenAIWSHandshakeCompatibility(account *Account, headers http.Head
 	key.sessionIDHyphen = normalizeOpenAIWSStableIdentityHeader(headers, "session-id")
 	key.sessionIDUnderscore = normalizeOpenAIWSStableIdentityHeader(headers, "session_id")
 	key.threadID = normalizeOpenAIWSStableIdentityHeader(headers, "thread-id")
-	key.clientRequestID = normalizeOpenAIWSStableIdentityHeader(headers, "x-client-request-id")
+	// x-client-request-id 不参与兼容键：按本仓库设计它是每请求随机值
+	// （见 applyCodexFingerprintHeaders 与握手/body 一致性测试），纳入比较会让
+	// 每个请求落到不同的桶，连接池永远无法复用。连接复用后该头本就不会再发。
 	key.codexWindowID = normalizeOpenAIWSStableIdentityHeader(headers, "x-codex-window-id")
 	return key
 }

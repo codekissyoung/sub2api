@@ -870,7 +870,9 @@ func TestOpenAIWSConnPool_AcquireDoesNotReuseDifferentStableIdentity(t *testing.
 		{name: "session hyphen", header: "session-id", value: "session-hyphen-b"},
 		{name: "session underscore", header: "session_id", value: "session-underscore-b"},
 		{name: "thread", header: "thread-id", value: "thread-b"},
-		{name: "client request", header: "x-client-request-id", value: "client-request-b"},
+		// x-client-request-id 不在用例内：本仓库按设计让它每请求随机
+		// （applyCodexFingerprintHeaders），因此它不属于握手兼容键——
+		// 见 normalizeOpenAIWSHandshakeCompatibility。
 		{name: "window", header: "x-codex-window-id", value: "window-b"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
