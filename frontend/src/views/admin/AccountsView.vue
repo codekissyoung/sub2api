@@ -1988,10 +1988,11 @@ const handleRefresh = async (a: Account) => {
   // OpenAI 每次刷新都会在服务端消耗当前 RT(等效轮换),不可逆——必须先确认并明确告知后果。
   if (a.platform === 'openai' && a.type === 'oauth' && !confirm(t('admin.accounts.refreshTokenConfirm', { name: a.name }))) return
   try {
-    const updated = await adminAPI.accounts.refreshCredentials(a.id)
-    patchAccountInList(updated)
+    const result = await adminAPI.accounts.refreshCredentials(a.id)
+    patchAccountInList(result.account)
     enterAutoRefreshSilentWindow()
     appStore.showSuccess(t('admin.accounts.tokenRefreshed'))
+    if (result.warning) appStore.showWarning(result.message)
   } catch (error: any) {
     console.error('Failed to refresh credentials:', error)
     appStore.showError(error?.message || t('common.error'))
