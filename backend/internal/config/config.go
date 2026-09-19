@@ -1242,6 +1242,9 @@ type OpenAICodexTicketConfig struct {
 	HarvestAttemptTimeoutSeconds int      `mapstructure:"harvest_attempt_timeout_seconds"`
 	FailClosed                   bool     `mapstructure:"fail_closed"`
 	Models                       []string `mapstructure:"models"`
+	// Inject 控制是否把打到的票注入业务请求并参与调度门控。
+	// 默认 true；enabled=true 且 inject=false 为观察模式：仅后台打票和展示，不影响转发链路。
+	Inject bool `mapstructure:"inject"`
 }
 
 // DefaultOpenAIWSClientFirstMessageTimeoutSeconds preserves the legacy ingress deadline.
@@ -2409,6 +2412,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.5")
 	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
+	viper.SetDefault("gateway.openai_codex_ticket.inject", true)
 	viper.SetDefault("gateway.openai_codex_ticket.target_length", 292)
 	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", 3600)
 	viper.SetDefault("gateway.openai_codex_ticket.refresh_before_seconds", 600)

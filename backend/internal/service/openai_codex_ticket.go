@@ -142,7 +142,7 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 			exp := ticket.ExpiresAt
 			status.ExpiresAt = &exp
 		}
-		status.Blocked = cfg.FailClosed && !status.Ready
+		status.Blocked = cfg.FailClosed && cfg.Inject && !status.Ready
 		out = append(out, status)
 	}
 	return out
@@ -159,6 +159,23 @@ func (s *OpenAIGatewayService) openAICodexTicketEnabledContext(ctx context.Conte
 	fallback := s.cfg != nil && s.cfg.Gateway.OpenAICodexTicket.Enabled
 	if s.settingService != nil {
 		return s.settingService.GetOpenAICodexTicketEnabled(ctx, fallback)
+	}
+	return fallback
+}
+
+// openAICodexTicketInjectEnabledContext 返回是否把门票注入业务请求。
+// 关闭即观察模式：打票照常，出站不注入、调度不拦截。
+func (s *OpenAIGatewayService) openAICodexTicketInjectEnabled() bool {
+	return s.openAICodexTicketInjectEnabledContext(context.Background())
+}
+
+func (s *OpenAIGatewayService) openAICodexTicketInjectEnabledContext(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	fallback := s.cfg != nil && s.cfg.Gateway.OpenAICodexTicket.Inject
+	if s.settingService != nil {
+		return s.settingService.GetOpenAICodexTicketInjectEnabled(ctx, fallback)
 	}
 	return fallback
 }
@@ -290,7 +307,7 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 // 请求路径只注入已捕获的有效门票，不现场打票；无票则返回
 // ErrOpenAICodexTicketUnavailable。打票由后台 harvester 完成。
 func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, account *Account, model string, h http.Header) error {
-	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) {
+	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) || !s.openAICodexTicketInjectEnabledContext(ctx) {
 		return nil
 	}
 	model = normalizeOpenAICodexTicketModel(model)
@@ -343,6 +360,9 @@ func (s *OpenAIGatewayService) openAICodexTicketOutboundModel(account *Account, 
 // 不是客户端原始模型：注入侧读的是出站 body.model，两侧口径必须一致。
 func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, outboundModel string) bool {
 	if s == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabled() {
+		return false
+	}
+	if !s.openAICodexTicketInjectEnabled() {
 		return false
 	}
 	cfg := s.openAICodexTicketConfig()

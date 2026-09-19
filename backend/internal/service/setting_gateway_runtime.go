@@ -332,6 +332,77 @@ func (s *SettingService) InvalidateOpenAICodexTicketEnabledCache() {
 	s.openAICodexTicketEnabledCache.Store(&cachedOpenAICodexTicketEnabled{expiresAt: 0})
 }
 
+type cachedOpenAICodexTicketInjectEnabled struct {
+	value     bool
+	expiresAt int64
+}
+
+const openAICodexTicketInjectCacheTTL = 5 * time.Second
+
+// GetOpenAICodexTicketInjectEnabled 返回 292 门票注入开关。
+// 设置键存在时以后台为准；缺失则回退 yaml/env（默认 true）。
+func (s *SettingService) GetOpenAICodexTicketInjectEnabled(ctx context.Context, fallback bool) bool {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if ctx.Err() != nil {
+		return fallback
+	}
+	if s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	if cached, ok := s.openAICodexTicketInjectCache.Load().(*cachedOpenAICodexTicketInjectEnabled); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.value
+		}
+	}
+	resultCh := s.openAICodexTicketInjectSF.DoChan(SettingKeyOpenAICodexTicketInjectEnabled, func() (any, error) {
+		if cached, ok := s.openAICodexTicketInjectCache.Load().(*cachedOpenAICodexTicketInjectEnabled); ok && cached != nil {
+			if time.Now().UnixNano() < cached.expiresAt {
+				return cached.value, nil
+			}
+		}
+		dbCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		value, err := s.settingRepo.GetValue(dbCtx, SettingKeyOpenAICodexTicketInjectEnabled)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil && !errors.Is(err, ErrSettingNotFound) {
+			if cached, ok := s.openAICodexTicketInjectCache.Load().(*cachedOpenAICodexTicketInjectEnabled); ok && cached != nil {
+				return cached.value, nil
+			}
+			return fallback, nil
+		}
+		enabled := fallback
+		if err == nil && strings.TrimSpace(value) != "" {
+			enabled = value == "true"
+		}
+		s.openAICodexTicketInjectCache.Store(&cachedOpenAICodexTicketInjectEnabled{
+			value:     enabled,
+			expiresAt: time.Now().Add(openAICodexTicketInjectCacheTTL).UnixNano(),
+		})
+		return enabled, nil
+	})
+	select {
+	case <-ctx.Done():
+		return fallback
+	case result := <-resultCh:
+		if v, ok := result.Val.(bool); ok && result.Err == nil {
+			return v
+		}
+		return fallback
+	}
+}
+
+func (s *SettingService) InvalidateOpenAICodexTicketInjectEnabledCache() {
+	if s == nil {
+		return
+	}
+	s.openAICodexTicketInjectSF.Forget(SettingKeyOpenAICodexTicketInjectEnabled)
+	s.openAICodexTicketInjectCache.Store(&cachedOpenAICodexTicketInjectEnabled{expiresAt: 0})
+}
+
 type cachedOpenAICodexTicketHarvestProxy struct {
 	value     string
 	expiresAt int64

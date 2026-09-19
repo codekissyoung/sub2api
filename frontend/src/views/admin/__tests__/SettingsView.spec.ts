@@ -740,6 +740,25 @@ describe("admin SettingsView payment visible method controls", () => {
     wrapper.unmount();
   });
 
+  it("submits the Codex ticket inject toggle only when harvest is enabled", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_codex_ticket_enabled: false,
+      openai_codex_ticket_inject_enabled: true,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    expect(wrapper.find("#codex-ticket-inject-enabled").exists()).toBe(false);
+    const harvestToggle = wrapper.get("#codex-ticket-enabled");
+    await harvestToggle.setValue(true);
+    const injectToggle = wrapper.get("#codex-ticket-inject-enabled");
+    await injectToggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+    expect(updateSettings.mock.calls[0]?.[0].openai_codex_ticket_inject_enabled).toBe(false);
+    wrapper.unmount();
+  });
+
   it("loads the masked Codex harvest proxy and submits a replacement URL", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

@@ -12,7 +12,7 @@ func TestAccountResponseCodexTicketsUsesConfiguredPolicy(t *testing.T) {
 	h := &AccountHandler{cfg: &config.Config{}}
 	require.Empty(t, h.accountResponseFromService(account).CodexTurnTickets)
 	require.Empty(t, h.accountListResponseFromService(account).CodexTurnTickets)
-	h.cfg.Gateway.OpenAICodexTicket = config.OpenAICodexTicketConfig{Enabled: true, Models: []string{"configured-model"}, FailClosed: false}
+	h.cfg.Gateway.OpenAICodexTicket = config.OpenAICodexTicketConfig{Enabled: true, Inject: true, Models: []string{"configured-model"}, FailClosed: false}
 	status := h.accountListResponseFromService(account).CodexTurnTickets
 	require.Len(t, status, 1)
 	require.Equal(t, "configured-model", status[0].Model)

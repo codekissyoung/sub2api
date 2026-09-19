@@ -716,6 +716,10 @@ const (
 	// 关闭：不打票、不注入 x-codex-turn-state，按原链路转发。
 	// 开启：后台打票并在业务请求中覆盖该头。
 	SettingKeyOpenAICodexTicketEnabled = "openai_codex_ticket_enabled"
+	// SettingKeyOpenAICodexTicketInjectEnabled 292 门票注入开关（后台可改、热更新，默认 true）。
+	// 开启：打票照常，业务请求注入 x-codex-turn-state，fail_closed 参与调度门控。
+	// 关闭（观察模式）：仅后台打票和状态展示，出站不注入、缺票不拦调度。
+	SettingKeyOpenAICodexTicketInjectEnabled = "openai_codex_ticket_inject_enabled"
 	// SettingKeyOpenAICodexTicketHarvestProxyURL Codex 292 打票出口（socks5h/http），后台可改、热更新。
 	SettingKeyOpenAICodexTicketHarvestProxyURL = "openai_codex_ticket_harvest_proxy_url"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。

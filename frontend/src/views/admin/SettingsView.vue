@@ -4567,6 +4567,23 @@
                     v-model="form.openai_codex_ticket_enabled"
                   />
                 </div>
+                <div
+                  v-if="form.openai_codex_ticket_enabled"
+                  class="flex items-center justify-between gap-4"
+                >
+                  <div class="min-w-0">
+                    <h3 class="text-base font-semibold text-gray-900 dark:text-white">
+                      {{ t("admin.settings.gatewayForwarding.codexTicketInject") }}
+                    </h3>
+                    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.gatewayForwarding.codexTicketInjectDesc") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    id="codex-ticket-inject-enabled"
+                    v-model="form.openai_codex_ticket_inject_enabled"
+                  />
+                </div>
                 <div>
                   <h3 class="text-base font-semibold text-gray-900 dark:text-white">
                     {{ t("admin.settings.gatewayForwarding.codexTicketHarvestProxy") }}
@@ -9934,6 +9951,7 @@ const form = reactive<SettingsForm>({
   openai_codex_client_version_synced: "",
   openai_codex_version_auto_sync_enabled: true,
   openai_codex_ticket_enabled: false,
+  openai_codex_ticket_inject_enabled: true,
   openai_codex_ticket_harvest_proxy_url: "",
   openai_codex_ticket_harvest_proxy_configured: false,
   // codex_cli_only 加固
@@ -11543,6 +11561,8 @@ async function saveSettings() {
       openai_codex_version_auto_sync_enabled:
         form.openai_codex_version_auto_sync_enabled,
       openai_codex_ticket_enabled: form.openai_codex_ticket_enabled,
+      openai_codex_ticket_inject_enabled:
+        form.openai_codex_ticket_inject_enabled,
       openai_codex_ticket_harvest_proxy_url:
         form.openai_codex_ticket_harvest_proxy_url?.trim() || "",
       min_codex_version: form.min_codex_version?.trim() || "",

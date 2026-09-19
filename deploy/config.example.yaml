@@ -330,6 +330,10 @@ gateway:
   # Credential shadow accounts retain their existing forwarding policy and are not ticket-gated.
   openai_codex_ticket:
     enabled: false
+    # 是否把门票注入业务请求并参与调度门控（默认 true）。
+    # enabled=true 且 inject=false 为观察模式：仅后台打票和展示票据状态，出站不注入、缺票不拦调度。
+    # Admin UI 开关（292 门票注入）可覆盖此值，无需重启。
+    inject: true
     target_length: 292
     ttl_seconds: 3600
     refresh_before_seconds: 600
