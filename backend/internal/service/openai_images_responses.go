@@ -1925,6 +1925,9 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// 图片生成的 /responses 线型同样可能铸 turn-state：见票即收（非门控模型自动跳过）。
+	s.captureOpenAICodexTicket(account, upstreamModel, resp.Header)
+
 	var (
 		usage            OpenAIUsage
 		imageCount       int

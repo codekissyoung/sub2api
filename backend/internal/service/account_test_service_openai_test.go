@@ -704,3 +704,44 @@ func TestAccountTestService_OpenAIChatCompletionsPathRejectsNonJSONStream(t *tes
 	require.Contains(t, recorder.Body.String(), "/v1/chat/completions")
 	require.NotContains(t, recorder.Body.String(), `"success":true`)
 }
+
+// 管理端测试请求的响应携带 turn-state 时，票据必须被网关收票（见票即收）。
+func TestAccountTestService_OpenAITestCapturesTurnStateTicket(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	resp := newJSONResponse(http.StatusOK, "")
+	resp.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	resp.Header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
+
+	gateway := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TTLSeconds: 3600}, nil)
+	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
+	svc := &AccountTestService{httpUpstream: upstream, openaiGatewayService: gateway}
+	account := &Account{
+		ID:          91,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "test-token"},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.6-sol", "", "")
+	require.NoError(t, err)
+	ticket := gateway.lookupOpenAICodexTicket(account, "gpt-5.6-sol")
+	require.NotNil(t, ticket)
+	require.Len(t, ticket.State, 312)
+
+	// 未启用票据功能时不收。
+	gatewayOff := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: false}, nil)
+	resp2 := newJSONResponse(http.StatusOK, "")
+	resp2.Body = io.NopCloser(strings.NewReader(`data: {"type":"response.completed"}
+
+`))
+	resp2.Header.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
+	svc2 := &AccountTestService{httpUpstream: &queuedHTTPUpstream{responses: []*http.Response{resp2}}, openaiGatewayService: gatewayOff}
+	ctx2, _ := newTestContext()
+	require.NoError(t, svc2.testOpenAIAccountConnection(ctx2, account, "gpt-5.6-sol", "", ""))
+	require.Nil(t, gatewayOff.lookupOpenAICodexTicket(account, "gpt-5.6-sol"))
+}

@@ -206,6 +206,8 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	if !account.IsShadow() {
 		s.UpdateCodexUsageSnapshotFromHeaders(ctx, account.ID, resp.Header)
 	}
+	// alpha search 复用 /responses 线型：见票即收。
+	s.captureOpenAICodexTicket(account, upstreamModel, resp.Header)
 	alphaRespBody, err := openAIAlphaSearchResponseFromResponsesSSE(respBody)
 	if err != nil {
 		return nil, err

@@ -919,6 +919,10 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			mergeAccountExtra(account, updates)
 		}
 	}
+	// 管理端测试请求同样是真实上游响应：见票即收（非门控模型/未启用自动跳过）。
+	if isOAuth && s.openaiGatewayService != nil {
+		s.openaiGatewayService.captureOpenAICodexTicket(account, upstreamTestModelID, resp.Header)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -2256,6 +2260,11 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// compact 探测同样走 /responses：见票即收。
+	if isOAuth && s.openaiGatewayService != nil {
+		s.openaiGatewayService.captureOpenAICodexTicket(account, testModelID, resp.Header)
+	}
+
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
 	if !agentIdentityTaskRecoveryWasTried(ctx) && credentialAccount.IsOpenAIAgentIdentity() && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
@@ -3173,6 +3182,11 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 			message = fmt.Sprintf("Image upstream returned %d", resp.StatusCode)
 		}
 		return s.sendErrorAndEnd(c, message)
+	}
+
+	// 图片测试的 OAuth 响应同样可能铸 turn-state：见票即收（非门控模型自动跳过）。
+	if s.openaiGatewayService != nil {
+		s.openaiGatewayService.captureOpenAICodexTicket(account, modelID, resp.Header)
 	}
 
 	body, err := io.ReadAll(resp.Body)

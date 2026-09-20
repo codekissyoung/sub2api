@@ -936,6 +936,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		connID := strings.TrimSpace(lease.ConnID())
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
 			turnState = handshakeTurnState
+			// WS 握手响应同样铸 turn-state（codex-rs 三种捕获途径之一）：见票即收。
+			s.captureOpenAICodexTicket(account, canonicalOpenAIAccountSchedulingModel(account, ingressSessionOriginalModel), http.Header{
+				http.CanonicalHeaderKey(openAICodexTurnStateHeader): {handshakeTurnState},
+			})
 			if stateStore != nil && sessionHash != "" {
 				stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
 			}
