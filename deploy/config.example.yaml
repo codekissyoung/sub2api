@@ -339,6 +339,7 @@ gateway:
     refresh_before_seconds: 600
     # 后台「系统设置 → 网关 → Codex 设置」可覆盖此值，无需重启。
     # 后台值的读取缓存为 5 秒，下个探测周期使用新代理；代理服务商自行负责轮换 IP。
+    # 留空表示从本机 IP 直连打票（适用于业务流量本就直连的部署）。
     harvest_proxy_url: ""
     harvest_probe_interval_seconds: 6
     harvest_attempt_timeout_seconds: 25
