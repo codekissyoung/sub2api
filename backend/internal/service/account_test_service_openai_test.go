@@ -729,9 +729,10 @@ func TestAccountTestService_OpenAITestCapturesTurnStateTicket(t *testing.T) {
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.6-sol", "", "")
 	require.NoError(t, err)
-	ticket := gateway.lookupOpenAICodexTicket(account, "gpt-5.6-sol")
-	require.NotNil(t, ticket)
-	require.Len(t, ticket.State, 312)
+	bucket := gateway.lookupOpenAICodexTicketBucket(account, "gpt-5.6-sol")
+	require.NotNil(t, bucket)
+	require.NotNil(t, bucket.Degraded)
+	require.Len(t, bucket.Degraded.State, 312)
 
 	// 未启用票据功能时不收。
 	gatewayOff := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: false}, nil)
@@ -743,5 +744,5 @@ func TestAccountTestService_OpenAITestCapturesTurnStateTicket(t *testing.T) {
 	svc2 := &AccountTestService{httpUpstream: &queuedHTTPUpstream{responses: []*http.Response{resp2}}, openaiGatewayService: gatewayOff}
 	ctx2, _ := newTestContext()
 	require.NoError(t, svc2.testOpenAIAccountConnection(ctx2, account, "gpt-5.6-sol", "", ""))
-	require.Nil(t, gatewayOff.lookupOpenAICodexTicket(account, "gpt-5.6-sol"))
+	require.Nil(t, gatewayOff.lookupOpenAICodexTicketBucket(account, "gpt-5.6-sol"))
 }

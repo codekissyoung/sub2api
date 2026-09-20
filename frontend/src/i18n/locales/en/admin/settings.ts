@@ -549,6 +549,9 @@ export default {
         codexTicketInject: "292 ticket injection",
         codexTicketInjectDesc:
           "When off, tickets are only harvested in the background and shown in account status; production requests do not inject x-codex-turn-state and a missing ticket never blocks scheduling (observe-only mode). When on, tickets are injected and gate scheduling per the fail_closed policy.",
+        codexTicketInjectDryRun: "Injection dry-run",
+        codexTicketInjectDryRunDesc:
+          "When on (default), the full injection decision tree runs but only logs its decisions without rewriting request headers — use it to observe client echo rates and ticket coverage. When off, x-codex-turn-state is actually injected or replaced. Only normal-shape (292) tickets with sufficient remaining lifetime are injected; requests always pass through when no ticket is available.",
         codexTicketHarvestProxy: "292 harvest proxy",
         codexTicketHarvestProxyDesc:
           "Used only for minting 292 tickets when the ticket feature is enabled. Changes apply to subsequent probes without a restart. Production traffic still uses each account's residential proxy. Paste a full HTTP or SOCKS5h proxy URL including username and password. The proxy provider must handle IP rotation. Leave blank when saving to keep the stored value.",

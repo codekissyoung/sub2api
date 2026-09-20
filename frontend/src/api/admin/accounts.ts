@@ -575,6 +575,7 @@ export async function setSchedulable(id: number, schedulable: boolean): Promise<
  */
 export interface CodexTurnTicketDetail {
   model: string
+  shape?: string
   state?: string
   length?: number
   ready: boolean

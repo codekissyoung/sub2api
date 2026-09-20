@@ -36,13 +36,35 @@
       <div v-else class="space-y-3">
         <div
           v-for="ticket in tickets"
-          :key="ticket.model"
+          :key="`${ticket.model}:${ticket.shape ?? 'none'}`"
           class="rounded-xl border border-gray-200 p-3 dark:border-dark-600"
         >
           <div class="mb-2 flex items-center justify-between">
-            <span class="font-mono text-sm font-semibold text-gray-900 dark:text-gray-100">{{
-              ticket.model
-            }}</span>
+            <div class="flex items-center gap-2">
+              <span class="font-mono text-sm font-semibold text-gray-900 dark:text-gray-100">{{
+                ticket.model
+              }}</span>
+              <span
+                v-if="ticket.shape"
+                :class="[
+                  'rounded-full px-2 py-0.5 text-xs font-medium',
+                  ticket.shape === 'normal'
+                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                    : ticket.shape === 'degraded'
+                      ? 'bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+                ]"
+                :title="ticket.shape === 'degraded' ? t('admin.accounts.tickets.degradedHint') : undefined"
+              >
+                {{
+                  ticket.shape === 'normal'
+                    ? t('admin.accounts.tickets.shapeNormal')
+                    : ticket.shape === 'degraded'
+                      ? t('admin.accounts.tickets.shapeDegraded')
+                      : t('admin.accounts.tickets.shapeUnknown')
+                }}
+              </span>
+            </div>
             <span
               :class="[
                 'rounded-full px-2.5 py-0.5 text-xs font-semibold',

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"maps"
 	"net/http"
 	"net/url"
@@ -29,6 +30,123 @@ const (
 	openAICodexTicketDefaultModel    = "gpt-6-astra"
 	openAICodexTicketDefaultSolModel = "gpt-5.6-sol"
 )
+
+// turn-state blob 的形状分级。blob 是 Fernet token（gAAAAA 前缀 = 0x80 版本
+// 字节 + 8 字节签发时间戳），长度反映密文块数：个人号 292=10 块为正常态、
+// 312=11 块为降级态（多一块 payload，社区观测口径，非上游公开协议）。
+// 只有正常态可注入；降级态与未识别形状仅作证据留存与标记。
+const (
+	openAICodexTicketShapeNormal   = "normal"
+	openAICodexTicketShapeDegraded = "degraded"
+	openAICodexTicketShapeUnknown  = "unknown"
+)
+
+// 注入决策动作（dry_run 日志与强制执行共用同一决策树）。
+const (
+	openAICodexTicketActionInject       = "inject"         // 客户端未带 state → 补票
+	openAICodexTicketActionReplace      = "replace"        // 客户端带回降级态 → 换正常票
+	openAICodexTicketActionKeepClient   = "keep_client"    // 客户端带回正常态 → 不动（它的更新鲜）
+	openAICodexTicketActionKeepUnknown  = "keep_unknown"   // 客户端带回未知形状 → 不动（保守）
+	openAICodexTicketActionPassNoTicket = "pass_no_ticket" // 无正常票可注 → 放行（fail-open）
+)
+
+func openAICodexTicketShapeForLength(length int, cfg config.OpenAICodexTicketConfig) string {
+	if length <= 0 {
+		return openAICodexTicketShapeUnknown
+	}
+	normalLen, degradedLen := cfg.NormalLength, cfg.DegradedLength
+	if normalLen <= 0 {
+		normalLen = 292
+	}
+	if degradedLen <= 0 {
+		degradedLen = 312
+	}
+	switch length {
+	case normalLen:
+		return openAICodexTicketShapeNormal
+	case degradedLen:
+		return openAICodexTicketShapeDegraded
+	default:
+		return openAICodexTicketShapeUnknown
+	}
+}
+
+// openAICodexTicketBucket 按形状分槽存一个 (账号, 模型) 的门票。
+// 正常/降级槽分离，避免上游在两种形状间抖动时最新的 312 把还能用的 292
+// 顶掉；Other 槽留未识别形状作格式漂移证据。map 中的 bucket 一经 Store
+// 不再原地修改（clone-on-write），读侧拿到的指针是不可变快照。
+type openAICodexTicketBucket struct {
+	AccountID int64              `json:"account_id"`
+	Model     string             `json:"model"`
+	Normal    *openAICodexTicket `json:"normal,omitempty"`
+	Degraded  *openAICodexTicket `json:"degraded,omitempty"`
+	Other     *openAICodexTicket `json:"other,omitempty"`
+}
+
+func (b *openAICodexTicketBucket) clone() *openAICodexTicketBucket {
+	if b == nil {
+		return nil
+	}
+	out := *b
+	return &out
+}
+
+func (b *openAICodexTicketBucket) set(ticket *openAICodexTicket, cfg config.OpenAICodexTicketConfig) {
+	if b == nil || ticket == nil {
+		return
+	}
+	switch openAICodexTicketShapeForLength(ticket.Length, cfg) {
+	case openAICodexTicketShapeNormal:
+		b.Normal = ticket
+	case openAICodexTicketShapeDegraded:
+		b.Degraded = ticket
+	default:
+		b.Other = ticket
+	}
+}
+
+// merge 逐槽取更新的一张（CapturedAt 晚者胜），返回新 bucket，不改原值。
+func (b *openAICodexTicketBucket) merge(other *openAICodexTicketBucket) *openAICodexTicketBucket {
+	if b == nil {
+		return other.clone()
+	}
+	out := b.clone()
+	if other == nil {
+		return out
+	}
+	out.Normal = newerOpenAICodexTicket(out.Normal, other.Normal)
+	out.Degraded = newerOpenAICodexTicket(out.Degraded, other.Degraded)
+	out.Other = newerOpenAICodexTicket(out.Other, other.Other)
+	if out.AccountID == 0 {
+		out.AccountID = other.AccountID
+	}
+	if out.Model == "" {
+		out.Model = other.Model
+	}
+	return out
+}
+
+func newerOpenAICodexTicket(a, b *openAICodexTicket) *openAICodexTicket {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	if b.CapturedAt.After(a.CapturedAt) {
+		return b
+	}
+	return a
+}
+
+// 同桶并发合并（同号同模型并行请求的响应同时捕获）用分段锁保护。
+var openAICodexTicketBucketLocks [64]sync.Mutex
+
+func openAICodexTicketBucketLock(key string) *sync.Mutex {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return &openAICodexTicketBucketLocks[h.Sum32()%uint32(len(openAICodexTicketBucketLocks))]
+}
 
 // ErrOpenAICodexTicketUnavailable 表示该号该模型没有可用的 292 门票，
 // 且 fail_closed 禁止裸打业务请求。
@@ -80,6 +198,15 @@ func (s *OpenAIGatewayService) openAICodexTicketConfig() config.OpenAICodexTicke
 	if len(cfg.Models) == 0 {
 		cfg.Models = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
 	}
+	if cfg.NormalLength <= 0 {
+		cfg.NormalLength = 292
+	}
+	if cfg.DegradedLength <= 0 {
+		cfg.DegradedLength = 312
+	}
+	if cfg.InjectMinRemainingSeconds <= 0 {
+		cfg.InjectMinRemainingSeconds = 600
+	}
 	return cfg
 }
 
@@ -99,8 +226,10 @@ func (s *OpenAIGatewayService) openAICodexTicketGatedModel(model string) bool {
 // OpenAICodexTicketStatus 是给管理端看的门票摘要，不含 state blob。
 type OpenAICodexTicketStatus struct {
 	Model            string     `json:"model"`
+	Shape            string     `json:"shape,omitempty"`
 	Length           int        `json:"length,omitempty"`
 	Ready            bool       `json:"ready"`
+	Degraded         bool       `json:"degraded,omitempty"`
 	RemainingSeconds int64      `json:"remaining_seconds"`
 	Blocked          bool       `json:"blocked"`
 	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
@@ -110,9 +239,15 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 	if !cfg.Enabled || !isOpenAICodexTicketAccount(account) {
 		return nil
 	}
-	models, targetLen := cfg.Models, cfg.TargetLength
+	models := cfg.Models
 	if len(models) == 0 {
 		models = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
+	}
+	if cfg.NormalLength <= 0 {
+		cfg.NormalLength = 292
+	}
+	if cfg.DegradedLength <= 0 {
+		cfg.DegradedLength = 312
 	}
 	out := make([]OpenAICodexTicketStatus, 0, len(models))
 	for _, model := range models {
@@ -121,20 +256,27 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 			continue
 		}
 		status := OpenAICodexTicketStatus{Model: model}
-		ticket := parseOpenAICodexTicketFromAny(0, model, nil)
+		var bucket *openAICodexTicketBucket
 		if account != nil && account.Extra != nil {
-			ticket = parseOpenAICodexTicketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)])
+			bucket = parseOpenAICodexTicketBucketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)], cfg)
 		}
-		if ticket.valid(now, targetLen) {
-			status.Ready = true
-			status.Length = ticket.Length
-			remaining := int64(ticket.ExpiresAt.Sub(now) / time.Second)
-			if remaining < 0 {
-				remaining = 0
+		if bucket != nil {
+			// 展示槽位优先级：正常票有效 → normal；否则降级票有效 → degraded
+			// （该号当前被上游降级的标记）；再否则未知形状；全无效 → 最近一张。
+			display, shape := pickOpenAICodexTicketDisplaySlot(bucket, now)
+			status.Shape = shape
+			if display != nil {
+				status.Length = display.Length
+				exp := display.ExpiresAt
+				status.ExpiresAt = &exp
+				if remaining := int64(display.ExpiresAt.Sub(now) / time.Second); remaining > 0 {
+					status.RemainingSeconds = remaining
+				}
 			}
-			status.RemainingSeconds = remaining
-			exp := ticket.ExpiresAt
-			status.ExpiresAt = &exp
+			if shape == openAICodexTicketShapeNormal && bucket.Normal.valid(now, 0) {
+				status.Ready = true
+			}
+			status.Degraded = shape == openAICodexTicketShapeDegraded
 		}
 		status.Blocked = cfg.FailClosed && cfg.Inject && !status.Ready
 		out = append(out, status)
@@ -142,11 +284,33 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 	return out
 }
 
+// pickOpenAICodexTicketDisplaySlot 选出管理端摘要要展示的槽位。
+func pickOpenAICodexTicketDisplaySlot(bucket *openAICodexTicketBucket, now time.Time) (*openAICodexTicket, string) {
+	if bucket == nil {
+		return nil, ""
+	}
+	if bucket.Normal != nil && bucket.Normal.valid(now, 0) {
+		return bucket.Normal, openAICodexTicketShapeNormal
+	}
+	if bucket.Degraded != nil && bucket.Degraded.valid(now, 0) {
+		return bucket.Degraded, openAICodexTicketShapeDegraded
+	}
+	if bucket.Other != nil && bucket.Other.valid(now, 0) {
+		return bucket.Other, openAICodexTicketShapeUnknown
+	}
+	latest := newerOpenAICodexTicket(newerOpenAICodexTicket(bucket.Normal, bucket.Degraded), bucket.Other)
+	if latest == nil {
+		return nil, ""
+	}
+	return latest, openAICodexTicketShapeForLength(latest.Length, config.OpenAICodexTicketConfig{})
+}
+
 // OpenAICodexTicketDetail 是管理端「票据」视图用的完整门票信息，包含 state blob。
 // 仅经 admin 鉴权接口暴露：blob 是不透明回合状态而非凭证，1 小时自然过期，
 // 但仍属上游铸造的敏感材料——不写入日志、不进入导出（RedactOpenAICodexTicketExtra）。
 type OpenAICodexTicketDetail struct {
 	Model            string     `json:"model"`
+	Shape            string     `json:"shape,omitempty"`
 	State            string     `json:"state,omitempty"`
 	Length           int        `json:"length,omitempty"`
 	Ready            bool       `json:"ready"`
@@ -155,8 +319,9 @@ type OpenAICodexTicketDetail struct {
 	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
 }
 
-// OpenAICodexTicketDetails 合并内存与落库两份票（lookupOpenAICodexTicket 已做
-// 新旧裁决），按门控模型逐张返回；无记录的模型返回占位行（Ready=false）。
+// OpenAICodexTicketDetails 合并内存与落库两份票（lookupOpenAICodexTicketBucket 已做
+// 逐槽新旧裁决），按门控模型逐槽返回；无记录的模型返回占位行（Ready=false）。
+// 一个模型最多三行：normal（可注入）/ degraded（降级标记）/ unknown（漂移证据）。
 func (s *OpenAIGatewayService) OpenAICodexTicketDetails(account *Account, now time.Time) []OpenAICodexTicketDetail {
 	if s == nil || !s.openAICodexTicketEnabled() || !isOpenAICodexTicketAccount(account) {
 		return nil
@@ -167,27 +332,42 @@ func (s *OpenAIGatewayService) OpenAICodexTicketDetails(account *Account, now ti
 		models = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
 	}
 	out := make([]OpenAICodexTicketDetail, 0, len(models))
-	for _, model := range models {
-		model = normalizeOpenAICodexTicketModel(model)
-		if model == "" {
-			continue
-		}
-		detail := OpenAICodexTicketDetail{Model: model}
-		if ticket := s.lookupOpenAICodexTicket(account, model); ticket != nil {
+	appendSlot := func(model, shape string, ticket *openAICodexTicket) {
+		detail := OpenAICodexTicketDetail{Model: model, Shape: shape}
+		if ticket != nil {
 			detail.State = ticket.State
 			detail.Length = ticket.Length
 			captured := ticket.CapturedAt
 			detail.CapturedAt = &captured
 			exp := ticket.ExpiresAt
 			detail.ExpiresAt = &exp
-			if ticket.valid(now, cfg.TargetLength) {
-				detail.Ready = true
-				if remaining := int64(ticket.ExpiresAt.Sub(now) / time.Second); remaining > 0 {
-					detail.RemainingSeconds = remaining
-				}
+			if remaining := int64(ticket.ExpiresAt.Sub(now) / time.Second); remaining > 0 {
+				detail.RemainingSeconds = remaining
 			}
+			// Ready 仅授予「正常形状且未过期」——只有它能进注入候选。
+			detail.Ready = shape == openAICodexTicketShapeNormal && ticket.valid(now, 0)
 		}
 		out = append(out, detail)
+	}
+	for _, model := range models {
+		model = normalizeOpenAICodexTicketModel(model)
+		if model == "" {
+			continue
+		}
+		bucket := s.lookupOpenAICodexTicketBucket(account, model)
+		if bucket == nil || (bucket.Normal == nil && bucket.Degraded == nil && bucket.Other == nil) {
+			out = append(out, OpenAICodexTicketDetail{Model: model})
+			continue
+		}
+		if bucket.Normal != nil {
+			appendSlot(model, openAICodexTicketShapeNormal, bucket.Normal)
+		}
+		if bucket.Degraded != nil {
+			appendSlot(model, openAICodexTicketShapeDegraded, bucket.Degraded)
+		}
+		if bucket.Other != nil {
+			appendSlot(model, openAICodexTicketShapeUnknown, bucket.Other)
+		}
 	}
 	return out
 }
@@ -263,7 +443,9 @@ func (t *openAICodexTicket) needsRefresh(now time.Time, refreshBefore time.Durat
 	return !t.ExpiresAt.After(now.Add(refreshBefore))
 }
 
-func (s *OpenAIGatewayService) lookupOpenAICodexTicket(account *Account, model string) *openAICodexTicket {
+// lookupOpenAICodexTicketBucket 合并内存与落库两份 bucket（逐槽取新），
+// 合并结果回写内存。返回的 bucket 是不可变快照，读侧无需加锁。
+func (s *OpenAIGatewayService) lookupOpenAICodexTicketBucket(account *Account, model string) *openAICodexTicketBucket {
 	if s == nil || account == nil || account.ID <= 0 {
 		return nil
 	}
@@ -272,31 +454,77 @@ func (s *OpenAIGatewayService) lookupOpenAICodexTicket(account *Account, model s
 		return nil
 	}
 	key := openAICodexTicketKey(account.ID, model)
-	targetLen := s.openAICodexTicketConfig().TargetLength
-	now := time.Now()
-	var mem *openAICodexTicket
-	if raw, ok := s.openaiCodexTickets.Load(key); ok {
-		mem, _ = raw.(*openAICodexTicket)
-	}
-	var extra *openAICodexTicket
+	cfg := s.openAICodexTicketConfig()
+	var extra *openAICodexTicketBucket
 	if account.Extra != nil {
-		extra = parseOpenAICodexTicketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)])
+		extra = parseOpenAICodexTicketBucketFromAny(account.ID, model, account.Extra[openAICodexTicketExtraKey(model)], cfg)
 	}
-	if extra.valid(now, targetLen) && (mem == nil || extra.CapturedAt.After(mem.CapturedAt)) {
-		s.openaiCodexTickets.Store(key, extra)
-		return extra
+	mu := openAICodexTicketBucketLock(key)
+	mu.Lock()
+	defer mu.Unlock()
+	var mem *openAICodexTicketBucket
+	if raw, ok := s.openaiCodexTickets.Load(key); ok {
+		mem, _ = raw.(*openAICodexTicketBucket)
 	}
-	if mem.valid(now, targetLen) {
-		return mem
+	merged := mem.merge(extra)
+	if merged == nil {
+		return nil
 	}
-	if extra != nil {
-		s.openaiCodexTickets.Store(key, extra)
-		return extra
+	merged.AccountID = account.ID
+	merged.Model = model
+	s.openaiCodexTickets.Store(key, merged)
+	return merged
+}
+
+// parseOpenAICodexTicketBucketFromAny 解析 extra 中的 bucket；兼容旧的扁平
+// 单票格式（{"state": ...}，按长度分级归入对应槽位）。
+func parseOpenAICodexTicketBucketFromAny(accountID int64, model string, raw any, cfg config.OpenAICodexTicketConfig) *openAICodexTicketBucket {
+	if raw == nil {
+		return nil
 	}
-	if mem != nil {
-		s.openaiCodexTickets.Delete(key)
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil
 	}
-	return nil
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(b, &probe); err != nil {
+		return nil
+	}
+	model = normalizeOpenAICodexTicketModel(model)
+	if _, flat := probe["state"]; flat {
+		ticket := parseOpenAICodexTicketFromAny(accountID, model, raw)
+		if ticket == nil {
+			return nil
+		}
+		bucket := &openAICodexTicketBucket{AccountID: accountID, Model: model}
+		bucket.set(ticket, cfg)
+		return bucket
+	}
+	var bucket openAICodexTicketBucket
+	if err := json.Unmarshal(b, &bucket); err != nil {
+		return nil
+	}
+	bucket.AccountID = accountID
+	if model != "" {
+		bucket.Model = model
+	}
+	for _, slot := range []*openAICodexTicket{bucket.Normal, bucket.Degraded, bucket.Other} {
+		if slot == nil {
+			continue
+		}
+		slot.AccountID = accountID
+		if model != "" {
+			slot.Model = model
+		}
+		slot.State = strings.TrimSpace(slot.State)
+		if slot.Length == 0 {
+			slot.Length = len(slot.State)
+		}
+	}
+	if bucket.Normal == nil && bucket.Degraded == nil && bucket.Other == nil {
+		return nil
+	}
+	return &bucket
 }
 
 func parseOpenAICodexTicketFromAny(accountID int64, model string, raw any) *openAICodexTicket {
@@ -325,25 +553,50 @@ func parseOpenAICodexTicketFromAny(accountID int64, model string, raw any) *open
 	return &ticket
 }
 
-func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, account *Account, ticket *openAICodexTicket) {
+// mergeOpenAICodexTicketIntoBucket 把一张新票按形状归入桶（clone-on-write），
+// 返回合并后的不可变快照。
+func (s *OpenAIGatewayService) mergeOpenAICodexTicketIntoBucket(account *Account, ticket *openAICodexTicket) *openAICodexTicketBucket {
 	if s == nil || account == nil || ticket == nil || account.ID <= 0 {
-		return
+		return nil
 	}
 	model := normalizeOpenAICodexTicketModel(ticket.Model)
+	if model == "" {
+		return nil
+	}
 	ticket.Model = model
 	ticket.AccountID = account.ID
-	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, model), ticket)
-	if s.accountRepo == nil {
+	cfg := s.openAICodexTicketConfig()
+	key := openAICodexTicketKey(account.ID, model)
+	mu := openAICodexTicketBucketLock(key)
+	mu.Lock()
+	defer mu.Unlock()
+	var bucket *openAICodexTicketBucket
+	if raw, ok := s.openaiCodexTickets.Load(key); ok {
+		bucket, _ = raw.(*openAICodexTicketBucket)
+	}
+	if bucket == nil {
+		bucket = &openAICodexTicketBucket{AccountID: account.ID, Model: model}
+	} else {
+		bucket = bucket.clone()
+	}
+	bucket.set(ticket, cfg)
+	s.openaiCodexTickets.Store(key, bucket)
+	return bucket
+}
+
+func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, account *Account, ticket *openAICodexTicket) {
+	bucket := s.mergeOpenAICodexTicketIntoBucket(account, ticket)
+	if bucket == nil || s.accountRepo == nil {
 		return
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
-		openAICodexTicketExtraKey(model): ticket,
+		openAICodexTicketExtraKey(bucket.Model): bucket,
 	}); err != nil {
 		logger.L().Warn("openai_codex_ticket persist failed",
 			zap.Int64("account_id", account.ID),
-			zap.String("model", model),
+			zap.String("model", bucket.Model),
 			zap.Error(err),
 		)
 	}
@@ -381,15 +634,26 @@ func (s *OpenAIGatewayService) captureOpenAICodexTicket(account *Account, outbou
 		CapturedAt: now,
 		ExpiresAt:  now.Add(time.Duration(cfg.TTLSeconds) * time.Second),
 	}
-	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, model), ticket)
+	s.mergeOpenAICodexTicketIntoBucket(account, ticket)
 	if s.accountRepo == nil || !s.getCodexTicketPersistThrottle().Allow(account.ID, now) {
 		return
 	}
+	key := openAICodexTicketKey(account.ID, model)
 	go func() {
+		// 落库取当前内存里的整桶快照（三槽），而非单票：并发捕获的另一形状
+		// 不应被这次写覆盖。
+		raw, ok := s.openaiCodexTickets.Load(key)
+		if !ok {
+			return
+		}
+		bucket, _ := raw.(*openAICodexTicketBucket)
+		if bucket == nil {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
-			openAICodexTicketExtraKey(model): ticket,
+			openAICodexTicketExtraKey(model): bucket,
 		}); err != nil {
 			logger.L().Warn("openai_codex_ticket persist failed",
 				zap.Int64("account_id", account.ID),
@@ -400,9 +664,82 @@ func (s *OpenAIGatewayService) captureOpenAICodexTicket(account *Account, outbou
 	}()
 }
 
-// applyOpenAICodexTicket 在出站请求上覆盖 x-codex-turn-state。
-// 请求路径只注入已捕获的有效门票，不现场打票；无票则返回
-// ErrOpenAICodexTicketUnavailable。票的第一来源是真实响应的被动捕获
+// injectableOpenAICodexTicket 返回可注入的正常形状门票：未过期且剩余有效期
+// 超过 inject_min_remaining_seconds 安全边际（名义 TTL 1h，按捕获时间保守估）。
+func (s *OpenAIGatewayService) injectableOpenAICodexTicket(account *Account, model string, now time.Time, cfg config.OpenAICodexTicketConfig) *openAICodexTicket {
+	bucket := s.lookupOpenAICodexTicketBucket(account, model)
+	if bucket == nil || bucket.Normal == nil {
+		return nil
+	}
+	ticket := bucket.Normal
+	if !ticket.valid(now, 0) {
+		return nil
+	}
+	margin := cfg.InjectMinRemainingSeconds
+	if margin <= 0 {
+		margin = 600
+	}
+	if !ticket.ExpiresAt.After(now.Add(time.Duration(margin) * time.Second)) {
+		return nil
+	}
+	return ticket
+}
+
+// decideOpenAICodexTicketAction 注入决策树（dry_run 与强制执行共用）：
+// 客户端带回正常态 → 不动（它的票比库里的新鲜）；带回降级态 → 替换；
+// 未带 → 补票；未知形状 → 保守不动；无正常票 → 放行（fail-open）。
+func decideOpenAICodexTicketAction(ticket *openAICodexTicket, clientState string, cfg config.OpenAICodexTicketConfig) string {
+	if ticket == nil {
+		return openAICodexTicketActionPassNoTicket
+	}
+	clientState = strings.TrimSpace(clientState)
+	if clientState == "" {
+		return openAICodexTicketActionInject
+	}
+	switch openAICodexTicketShapeForLength(len(clientState), cfg) {
+	case openAICodexTicketShapeNormal:
+		return openAICodexTicketActionKeepClient
+	case openAICodexTicketShapeDegraded:
+		return openAICodexTicketActionReplace
+	default:
+		return openAICodexTicketActionKeepUnknown
+	}
+}
+
+// openAICodexTicketInjectDryRunContext 返回注入是否为演练模式。
+// 演练模式跑完整决策树但只记日志、不改写请求头。默认 true（安全）：
+// settings 键缺失时一律按演练处理。
+func (s *OpenAIGatewayService) openAICodexTicketInjectDryRun(ctx context.Context) bool {
+	if s == nil {
+		return true
+	}
+	if s.settingService != nil {
+		return s.settingService.GetOpenAICodexTicketInjectDryRun(ctx, true)
+	}
+	return true
+}
+
+func (s *OpenAIGatewayService) logOpenAICodexTicketDecision(account *Account, model, action, clientState string, ticket *openAICodexTicket, now time.Time, dryRun bool) {
+	fields := []zap.Field{
+		zap.Int64("account_id", account.ID),
+		zap.String("model", model),
+		zap.String("action", action),
+		zap.Int("client_len", len(strings.TrimSpace(clientState))),
+		zap.Bool("dry_run", dryRun),
+	}
+	if ticket != nil {
+		fields = append(fields,
+			zap.Int("ticket_len", ticket.Length),
+			zap.Int64("ticket_remaining_sec", int64(ticket.ExpiresAt.Sub(now)/time.Second)),
+		)
+	}
+	logger.L().Info("openai_codex_ticket inject decision", fields...)
+}
+
+// applyOpenAICodexTicket 按决策树处理出站请求的 x-codex-turn-state。
+// 演练模式（inject_dry_run，默认开）跑完整决策树只记日志不改写；
+// 正式模式只注入正常形状（292）且余期充足的票，无票 fail-open
+// （FailClosed 例外，默认关）。票的第一来源是真实响应的被动捕获
 // （captureOpenAICodexTicket），后台 harvester 仅 inject 模式下兜底。
 func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, account *Account, model string, h http.Header) error {
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) || !s.openAICodexTicketInjectEnabledContext(ctx) {
@@ -413,15 +750,26 @@ func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, accou
 		return nil
 	}
 	cfg := s.openAICodexTicketConfig()
-	ticket := s.lookupOpenAICodexTicket(account, model)
-	if ticket.valid(time.Now(), cfg.TargetLength) {
+	now := time.Now()
+	ticket := s.injectableOpenAICodexTicket(account, model, now, cfg)
+	clientState := strings.TrimSpace(h.Get(openAICodexTurnStateHeader))
+	action := decideOpenAICodexTicketAction(ticket, clientState, cfg)
+	dryRun := s.openAICodexTicketInjectDryRun(ctx)
+	if dryRun {
+		s.logOpenAICodexTicketDecision(account, model, action, clientState, ticket, now, true)
+		return nil
+	}
+	switch action {
+	case openAICodexTicketActionInject, openAICodexTicketActionReplace:
 		h.Set(openAICodexTurnStateHeader, ticket.State)
+		s.logOpenAICodexTicketDecision(account, model, action, clientState, ticket, now, false)
 		return nil
+	case openAICodexTicketActionPassNoTicket:
+		if cfg.FailClosed {
+			return ErrOpenAICodexTicketUnavailable
+		}
 	}
-	if !cfg.FailClosed {
-		return nil
-	}
-	return ErrOpenAICodexTicketUnavailable
+	return nil
 }
 
 // openAICodexTicketOutboundModel 预测本请求真正出站的模型名，也就是
@@ -463,6 +811,10 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 	if !s.openAICodexTicketInjectEnabled() {
 		return false
 	}
+	// 演练模式只做决策日志，不改变调度：fail_closed 门控一并抑制。
+	if s.openAICodexTicketInjectDryRun(context.Background()) {
+		return false
+	}
 	cfg := s.openAICodexTicketConfig()
 	if !cfg.FailClosed {
 		return false
@@ -471,8 +823,7 @@ func (s *OpenAIGatewayService) openAICodexTicketBlocksAccount(account *Account, 
 	if !s.openAICodexTicketGatedModel(model) {
 		return false
 	}
-	ticket := s.lookupOpenAICodexTicket(account, model)
-	return !ticket.valid(time.Now(), cfg.TargetLength)
+	return s.injectableOpenAICodexTicket(account, model, time.Now(), cfg) == nil
 }
 
 func (s *OpenAIGatewayService) fireOpenAICodexTicketProbe(ctx context.Context, account *Account, token, model, proxyURL string, attemptTimeout time.Duration) (state string, status int, err error) {
@@ -627,8 +978,8 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 			if model == "" {
 				continue
 			}
-			// 已有一张有效且未临近过期的票 → 本周期不打，省得白刷。
-			if t := s.lookupOpenAICodexTicket(&account, model); t.valid(now, cfg.TargetLength) && !t.needsRefresh(now, refreshBefore) {
+			// 已有一张有效且未临近过期的正常票 → 本周期不打，省得白刷。
+			if t := s.injectableOpenAICodexTicket(&account, model, now, cfg); t != nil && !t.needsRefresh(now, refreshBefore) {
 				continue
 			}
 			acc := account

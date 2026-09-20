@@ -720,6 +720,10 @@ const (
 	// 开启：打票照常，业务请求注入 x-codex-turn-state，fail_closed 参与调度门控。
 	// 关闭（观察模式）：仅后台打票和状态展示，出站不注入、缺票不拦调度。
 	SettingKeyOpenAICodexTicketInjectEnabled = "openai_codex_ticket_inject_enabled"
+	// SettingKeyOpenAICodexTicketInjectDryRun 注入演练模式（后台可改、热更新，默认 true）。
+	// 开启（默认）：跑完整注入决策树但只记日志、不改写请求头——用于观察客户端
+	// 回带率与票覆盖率。关闭：真正按决策树注入/替换 x-codex-turn-state。
+	SettingKeyOpenAICodexTicketInjectDryRun = "openai_codex_ticket_inject_dry_run"
 	// SettingKeyOpenAICodexTicketHarvestProxyURL Codex 292 打票出口（socks5h/http），后台可改、热更新。
 	SettingKeyOpenAICodexTicketHarvestProxyURL = "openai_codex_ticket_harvest_proxy_url"
 	// SettingKeyOpenAIAllowClaudeCodeCodexPlugin 已废弃：历史全局开关只作为升级迁移输入读取。

@@ -190,6 +190,7 @@ func TestCodexTicketPolicyExemptsCredentialShadows(t *testing.T) {
 	cfg := config.OpenAICodexTicketConfig{Enabled: true, Inject: true, FailClosed: true, HarvestProxyURL: "http://proxy.example.com:8080"}
 	upstream := &httpUpstreamRecorder{}
 	svc := ticketTestService(t, cfg, upstream)
+	svc.settingService = ticketEnforceSettings()
 	svc.accountRepo = &codexTicketRefreshRepo{accounts: []Account{*shadow}}
 	require.True(t, svc.openAICodexTicketBlocksAccount(parent, "gpt-6-astra"))
 	for _, accountType := range []string{AccountTypeOAuth, AccountTypeSetupToken} {

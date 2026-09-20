@@ -24,7 +24,9 @@ func (r *codexTicketSettingRepo) GetValue(ctx context.Context, key string) (stri
 }
 
 func TestCodexTicketEnabledRuntimeSettingOverridesYaml(t *testing.T) {
-	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{}}}
+	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{
+		SettingKeyOpenAICodexTicketInjectDryRun: "false",
+	}}}
 	settings := NewSettingService(repo, &config.Config{})
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: false, Inject: true, FailClosed: true}, nil)
 	svc.settingService = settings
@@ -48,7 +50,7 @@ func TestCodexTicketEnabledRuntimeSettingOverridesYaml(t *testing.T) {
 	settings.InvalidateOpenAICodexTicketEnabledCache()
 	require.True(t, svc.openAICodexTicketEnabled())
 	h = http.Header{}
-	h.Set(openAICodexTurnStateHeader, "client-state")
+	h.Set(openAICodexTurnStateHeader, fakeCodexTicketState(312))
 	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h))
 	require.Equal(t, fakeCodexTicketState(292), h.Get(openAICodexTurnStateHeader))
 
@@ -62,7 +64,9 @@ func TestCodexTicketEnabledRuntimeSettingOverridesYaml(t *testing.T) {
 }
 
 func TestCodexTicketInjectRuntimeSettingOverridesYaml(t *testing.T) {
-	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{}}}
+	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{
+		SettingKeyOpenAICodexTicketInjectDryRun: "false",
+	}}}
 	settings := NewSettingService(repo, &config.Config{})
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, Inject: true, FailClosed: true}, nil)
 	svc.settingService = settings
@@ -76,7 +80,7 @@ func TestCodexTicketInjectRuntimeSettingOverridesYaml(t *testing.T) {
 		ExpiresAt:  time.Now().Add(time.Hour),
 	})
 
-	// 键缺失：回退 yaml（Inject=true）。
+	// 键缺失：回退 yaml（Inject=true）。客户端未带 state → 补票。
 	require.True(t, svc.openAICodexTicketInjectEnabledContext(context.Background()))
 	h := http.Header{}
 	require.NoError(t, svc.applyOpenAICodexTicket(context.Background(), account, "gpt-6-astra", h))
@@ -105,6 +109,25 @@ func TestCodexTicketInjectRuntimeSettingOverridesYaml(t *testing.T) {
 	repo.err = errors.New("database unavailable")
 	svc.settingService = NewSettingService(repo, &config.Config{})
 	require.True(t, svc.openAICodexTicketInjectEnabledContext(context.Background()))
+}
+
+// 演练开关：键缺失一律演练（安全默认）；显式 false 才真注入；DB 故障回退演练。
+func TestCodexTicketInjectDryRunDefaultsAndOverrides(t *testing.T) {
+	repo := &codexTicketSettingRepo{codexPolicyMigrationRepoStub: &codexPolicyMigrationRepoStub{values: map[string]string{}}}
+	settings := NewSettingService(repo, &config.Config{})
+	require.True(t, settings.GetOpenAICodexTicketInjectDryRun(context.Background(), true))
+
+	repo.values[SettingKeyOpenAICodexTicketInjectDryRun] = "false"
+	settings.InvalidateOpenAICodexTicketInjectDryRunCache()
+	require.False(t, settings.GetOpenAICodexTicketInjectDryRun(context.Background(), true))
+
+	repo.values[SettingKeyOpenAICodexTicketInjectDryRun] = "true"
+	settings.InvalidateOpenAICodexTicketInjectDryRunCache()
+	require.True(t, settings.GetOpenAICodexTicketInjectDryRun(context.Background(), true))
+
+	repo.err = errors.New("database unavailable")
+	svc2 := NewSettingService(repo, &config.Config{})
+	require.True(t, svc2.GetOpenAICodexTicketInjectDryRun(context.Background(), true))
 }
 
 func TestRefreshOpenAICodexTickets_DisabledSkipsHarvest(t *testing.T) {

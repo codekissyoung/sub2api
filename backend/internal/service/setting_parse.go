@@ -902,6 +902,12 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else if s != nil && s.cfg != nil {
 		result.OpenAICodexTicketInjectEnabled = s.cfg.Gateway.OpenAICodexTicket.Inject
 	}
+	if v, ok := settings[SettingKeyOpenAICodexTicketInjectDryRun]; ok && v != "" {
+		result.OpenAICodexTicketInjectDryRun = v == "true"
+	} else {
+		// 安全默认：键缺失一律演练（只记决策不改写），防止新部署意外真注入。
+		result.OpenAICodexTicketInjectDryRun = true
+	}
 	result.OpenAICodexTicketHarvestProxyURL = strings.TrimSpace(settings[SettingKeyOpenAICodexTicketHarvestProxyURL])
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]

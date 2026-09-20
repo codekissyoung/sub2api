@@ -1238,7 +1238,13 @@ type OpenAICodexTicketConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 	// TargetLength 门票长度硬校验：>0 时只接受恰好该长度的 blob（历史值 292）；
 	// <=0 不校验长度——上游格式会漂移（292 曾一夜之间变 312），被动捕获默认见什么存什么。
-	TargetLength                 int      `mapstructure:"target_length"`
+	TargetLength int `mapstructure:"target_length"`
+	// NormalLength / DegradedLength 形状分级长度（Fernet 密文块数的字符表现）：
+	// 个人号 292=正常（可注入）、312=降级（仅标记）。<=0 走默认值 292/312。
+	NormalLength   int `mapstructure:"normal_length"`
+	DegradedLength int `mapstructure:"degraded_length"`
+	// InjectMinRemainingSeconds 注入安全边际：只注入剩余有效期超过该值的正常票。
+	InjectMinRemainingSeconds    int      `mapstructure:"inject_min_remaining_seconds"`
 	TTLSeconds                   int      `mapstructure:"ttl_seconds"`
 	RefreshBeforeSeconds         int      `mapstructure:"refresh_before_seconds"`
 	HarvestProxyURL              string   `mapstructure:"harvest_proxy_url"`
