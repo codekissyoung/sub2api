@@ -1538,6 +1538,20 @@ export default {
       // Stats Modal
       viewStats: '查看统计',
       usageStatistics: '使用统计',
+      tickets: {
+        action: '票据',
+        title: 'Codex 票据（turn-state）',
+        empty: '该账号暂无票据记录',
+        ready: '有效',
+        expired: '已过期/无效',
+        length: '长度',
+        remaining: '剩余',
+        capturedAt: '捕获时间',
+        expiresAt: '过期时间',
+        noState: '未记录到票体',
+        copied: '票体已复制',
+        loadFailed: '票据加载失败',
+      },
       last30DaysUsage: '近30天使用统计（日均基于实际使用天数）',
       stats: {
         totalCost: '30天总费用',

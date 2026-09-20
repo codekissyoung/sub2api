@@ -67,6 +67,7 @@ type AccountHandler struct {
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	codexTicketSettings     *service.SettingService
+	openAIGatewayService    *service.OpenAIGatewayService
 	cfg                     *config.Config
 }
 
@@ -86,6 +87,11 @@ func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUs
 // SetCodexTicketSettings supplies the live policy without mutating shared config.
 func (h *AccountHandler) SetCodexTicketSettings(settings *service.SettingService) {
 	h.codexTicketSettings = settings
+}
+
+// SetOpenAIGatewayService attaches the gateway holding the in-memory codex ticket store.
+func (h *AccountHandler) SetOpenAIGatewayService(gateway *service.OpenAIGatewayService) {
+	h.openAIGatewayService = gateway
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -1332,6 +1338,28 @@ func (h *AccountHandler) Test(c *gin.Context) {
 			_ = c.Error(err)
 		}
 	}
+}
+
+// CodexTickets returns the recorded codex turn-state tickets (including the
+// state blob) for an account. Admin-only; the blob is ephemeral upstream
+// material and is never written to logs or exports.
+// GET /api/v1/admin/accounts/:id/codex-tickets
+func (h *AccountHandler) CodexTickets(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	details := []service.OpenAICodexTicketDetail{}
+	if h.openAIGatewayService != nil {
+		details = h.openAIGatewayService.OpenAICodexTicketDetails(account, time.Now())
+	}
+	response.Success(c, details)
 }
 
 // RecoverState handles unified recovery of recoverable account runtime state.

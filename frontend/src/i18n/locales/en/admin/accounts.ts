@@ -1481,6 +1481,20 @@ export default {
       // Stats Modal
       viewStats: 'View Stats',
       usageStatistics: 'Usage Statistics',
+      tickets: {
+        action: 'Tickets',
+        title: 'Codex Tickets (turn-state)',
+        empty: 'No tickets recorded for this account',
+        ready: 'Ready',
+        expired: 'Expired / invalid',
+        length: 'Length',
+        remaining: 'Remaining',
+        capturedAt: 'Captured',
+        expiresAt: 'Expires',
+        noState: 'No blob recorded',
+        copied: 'Ticket copied',
+        loadFailed: 'Failed to load tickets',
+      },
       last30DaysUsage: 'Last 30 days usage statistics (based on actual usage days)',
       stats: {
         totalCost: '30-Day Total Cost',

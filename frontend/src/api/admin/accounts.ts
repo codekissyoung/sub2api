@@ -573,6 +573,25 @@ export async function setSchedulable(id: number, schedulable: boolean): Promise<
  * @param id - Account ID
  * @returns List of available models for this account
  */
+export interface CodexTurnTicketDetail {
+  model: string
+  state?: string
+  length?: number
+  ready: boolean
+  remaining_seconds: number
+  captured_at?: string
+  expires_at?: string
+}
+
+/**
+ * Get recorded codex turn-state tickets for an account (admin only, includes blob)
+ * @param id - Account ID
+ */
+export async function getCodexTickets(id: number): Promise<CodexTurnTicketDetail[]> {
+  const { data } = await apiClient.get<CodexTurnTicketDetail[]>(`/admin/accounts/${id}/codex-tickets`)
+  return data
+}
+
 export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   const { data } = await apiClient.get<ClaudeModel[]>(`/admin/accounts/${id}/models`)
   return data
@@ -1035,6 +1054,7 @@ export const accountsAPI = {
   getTempUnschedulableStatus,
   resetTempUnschedulable,
   setSchedulable,
+  getCodexTickets,
   getAvailableModels,
   syncUpstreamModels,
   syncUpstreamModelsPreview,

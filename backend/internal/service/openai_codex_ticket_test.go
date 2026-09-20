@@ -588,3 +588,53 @@ func TestCodexTicketHarvesterSkipsObserveMode(t *testing.T) {
 	svc.refreshOpenAICodexTickets(context.Background())
 	require.Empty(t, upstream.requests)
 }
+
+// 管理端票据详情：内存（新）与 extra（旧/过期）合并，每张票含 blob 与就绪状态。
+func TestOpenAICodexTicketDetails_MergesMemoryAndExtra(t *testing.T) {
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, TTLSeconds: 3600}, nil)
+	account := ticketTestAccount(41)
+	now := time.Now()
+
+	expired := &openAICodexTicket{
+		AccountID: 41, Model: "gpt-5.6-sol",
+		State: fakeCodexTicketState(300), Length: 300,
+		CapturedAt: now.Add(-2 * time.Hour), ExpiresAt: now.Add(-time.Hour),
+	}
+	account.Extra = map[string]any{openAICodexTicketExtraKey("gpt-5.6-sol"): expired}
+
+	fresh := &openAICodexTicket{
+		AccountID: 41, Model: "gpt-6-astra",
+		State: fakeCodexTicketState(312), Length: 312,
+		CapturedAt: now, ExpiresAt: now.Add(time.Hour),
+	}
+	svc.openaiCodexTickets.Store(openAICodexTicketKey(41, "gpt-6-astra"), fresh)
+
+	details := svc.OpenAICodexTicketDetails(account, now)
+	require.Len(t, details, 2)
+	byModel := make(map[string]OpenAICodexTicketDetail, len(details))
+	for _, d := range details {
+		byModel[d.Model] = d
+	}
+
+	astra := byModel["gpt-6-astra"]
+	require.True(t, astra.Ready)
+	require.Equal(t, fresh.State, astra.State)
+	require.Equal(t, 312, astra.Length)
+	require.Positive(t, astra.RemainingSeconds)
+	require.NotNil(t, astra.CapturedAt)
+	require.NotNil(t, astra.ExpiresAt)
+
+	sol := byModel["gpt-5.6-sol"]
+	require.False(t, sol.Ready)
+	require.Equal(t, expired.State, sol.State) // 过期票仍展示记录，只是不就绪
+	require.Zero(t, sol.RemainingSeconds)
+}
+
+func TestOpenAICodexTicketDetails_DisabledOrNonOAuthNil(t *testing.T) {
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: false}, nil)
+	require.Empty(t, svc.OpenAICodexTicketDetails(ticketTestAccount(41), time.Now()))
+
+	svc = ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true}, nil)
+	apikeyAccount := &Account{ID: 42, Platform: PlatformOpenAI, Type: "apikey"}
+	require.Empty(t, svc.OpenAICodexTicketDetails(apikeyAccount, time.Now()))
+}

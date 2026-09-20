@@ -142,6 +142,56 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 	return out
 }
 
+// OpenAICodexTicketDetail 是管理端「票据」视图用的完整门票信息，包含 state blob。
+// 仅经 admin 鉴权接口暴露：blob 是不透明回合状态而非凭证，1 小时自然过期，
+// 但仍属上游铸造的敏感材料——不写入日志、不进入导出（RedactOpenAICodexTicketExtra）。
+type OpenAICodexTicketDetail struct {
+	Model            string     `json:"model"`
+	State            string     `json:"state,omitempty"`
+	Length           int        `json:"length,omitempty"`
+	Ready            bool       `json:"ready"`
+	RemainingSeconds int64      `json:"remaining_seconds"`
+	CapturedAt       *time.Time `json:"captured_at,omitempty"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+}
+
+// OpenAICodexTicketDetails 合并内存与落库两份票（lookupOpenAICodexTicket 已做
+// 新旧裁决），按门控模型逐张返回；无记录的模型返回占位行（Ready=false）。
+func (s *OpenAIGatewayService) OpenAICodexTicketDetails(account *Account, now time.Time) []OpenAICodexTicketDetail {
+	if s == nil || !s.openAICodexTicketEnabled() || !isOpenAICodexTicketAccount(account) {
+		return nil
+	}
+	cfg := s.openAICodexTicketConfig()
+	models := cfg.Models
+	if len(models) == 0 {
+		models = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
+	}
+	out := make([]OpenAICodexTicketDetail, 0, len(models))
+	for _, model := range models {
+		model = normalizeOpenAICodexTicketModel(model)
+		if model == "" {
+			continue
+		}
+		detail := OpenAICodexTicketDetail{Model: model}
+		if ticket := s.lookupOpenAICodexTicket(account, model); ticket != nil {
+			detail.State = ticket.State
+			detail.Length = ticket.Length
+			captured := ticket.CapturedAt
+			detail.CapturedAt = &captured
+			exp := ticket.ExpiresAt
+			detail.ExpiresAt = &exp
+			if ticket.valid(now, cfg.TargetLength) {
+				detail.Ready = true
+				if remaining := int64(ticket.ExpiresAt.Sub(now) / time.Second); remaining > 0 {
+					detail.RemainingSeconds = remaining
+				}
+			}
+		}
+		out = append(out, detail)
+	}
+	return out
+}
+
 func (s *OpenAIGatewayService) openAICodexTicketEnabled() bool {
 	return s.openAICodexTicketEnabledContext(context.Background())
 }

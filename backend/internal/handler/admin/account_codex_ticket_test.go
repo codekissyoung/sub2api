@@ -1,10 +1,14 @@
 package admin
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestAccountResponseCodexTicketsUsesConfiguredPolicy(t *testing.T) {
@@ -33,4 +37,25 @@ func TestAccountResponseCodexTicketsReadsLiveSettingsAfterRestart(t *testing.T) 
 	repo.values[service.SettingKeyOpenAICodexTicketEnabled] = "false"
 	settings.InvalidateOpenAICodexTicketEnabledCache()
 	require.Empty(t, h.accountResponseFromService(account).CodexTurnTickets)
+}
+
+func TestAccountCodexTicketsEndpointWithoutGatewayReturnsEmpty(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	account := &service.Account{ID: 41, Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth}
+	h := &AccountHandler{adminService: &stubAdminService{getAccountResult: account}}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/41/codex-tickets", nil)
+	c.Params = gin.Params{{Key: "id", Value: "41"}}
+	h.CodexTickets(c)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.JSONEq(t, `{"code":0,"message":"success","data":[]}`, rec.Body.String())
+
+	rec = httptest.NewRecorder()
+	c, _ = gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/abc/codex-tickets", nil)
+	c.Params = gin.Params{{Key: "id", Value: "abc"}}
+	h.CodexTickets(c)
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
