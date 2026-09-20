@@ -1302,6 +1302,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		} else if account.IsShadow() && account.ParentAccountID != nil {
 			notifyOpenAIAutoReset(*account.ParentAccountID)
 		}
+		// 被动捕获 x-codex-turn-state 门票（内部自行判定账号类型/开关/门控模型）。
+		s.captureOpenAICodexTicket(account, upstreamModel, resp.Header)
 
 		if usage == nil {
 			usage = &OpenAIUsage{}

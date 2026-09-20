@@ -118,7 +118,7 @@ func TestCodexTicketHarvesterStopCancelsInFlightWork(t *testing.T) {
 				}
 				return codexTicketResponse(), nil
 			}}
-			svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, HarvestProxyURL: "http://proxy.example.com:8080", HarvestAttemptTimeoutSeconds: 25, Models: []string{"gpt-6-astra"}}, upstream)
+			svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, Inject: true, HarvestProxyURL: "http://proxy.example.com:8080", HarvestAttemptTimeoutSeconds: 25, Models: []string{"gpt-6-astra"}}, upstream)
 			svc.accountRepo = repo
 			if stage == "accounts" {
 				repo.list = func(ctx context.Context) ([]Account, error) { return nil, block(ctx) }

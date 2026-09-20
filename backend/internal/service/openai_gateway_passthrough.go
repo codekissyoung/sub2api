@@ -443,6 +443,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if extractOpenAICodexTurnState(resp.Header) != "" {
 			s.noteOpenAICodexTurnStateProvenance(c, account)
 		}
+		// 被动捕获 x-codex-turn-state 门票（内部自行判定账号类型/开关/门控模型）。
+		s.captureOpenAICodexTicket(account, upstreamPassthroughModel, resp.Header)
 
 		if reqStream {
 			result, handleErr := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)

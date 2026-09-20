@@ -65,9 +65,6 @@ func (s *OpenAIGatewayService) openAICodexTicketConfig() config.OpenAICodexTicke
 	if s != nil && s.cfg != nil {
 		cfg = s.cfg.Gateway.OpenAICodexTicket
 	}
-	if cfg.TargetLength <= 0 {
-		cfg.TargetLength = 292
-	}
 	if cfg.TTLSeconds <= 0 {
 		cfg.TTLSeconds = 3600
 	}
@@ -116,9 +113,6 @@ func OpenAICodexTicketStatuses(account *Account, cfg config.OpenAICodexTicketCon
 	models, targetLen := cfg.Models, cfg.TargetLength
 	if len(models) == 0 {
 		models = []string{openAICodexTicketDefaultModel, openAICodexTicketDefaultSolModel}
-	}
-	if targetLen <= 0 {
-		targetLen = 292
 	}
 	out := make([]OpenAICodexTicketStatus, 0, len(models))
 	for _, model := range models {
@@ -198,7 +192,12 @@ func (t *openAICodexTicket) valid(now time.Time, targetLen int) bool {
 		return false
 	}
 	state := strings.TrimSpace(t.State)
-	if len(state) != targetLen || t.Length != targetLen || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+	if state == "" || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+		return false
+	}
+	// targetLen<=0 不校验长度：上游 blob 格式会漂移（292 一夜变 312），
+	// 被动捕获到的真实票不应因长度硬编码而报废。
+	if targetLen > 0 && (len(state) != targetLen || t.Length != targetLen) {
 		return false
 	}
 	if t.ExpiresAt.IsZero() || !now.Before(t.ExpiresAt) {
@@ -223,10 +222,7 @@ func (s *OpenAIGatewayService) lookupOpenAICodexTicket(account *Account, model s
 		return nil
 	}
 	key := openAICodexTicketKey(account.ID, model)
-	targetLen := 292
-	if s != nil {
-		targetLen = s.openAICodexTicketConfig().TargetLength
-	}
+	targetLen := s.openAICodexTicketConfig().TargetLength
 	now := time.Now()
 	var mem *openAICodexTicket
 	if raw, ok := s.openaiCodexTickets.Load(key); ok {
@@ -303,9 +299,61 @@ func (s *OpenAIGatewayService) storeOpenAICodexTicket(ctx context.Context, accou
 	}
 }
 
+// captureOpenAICodexTicket 从真实业务响应头被动捕获 turn-state 门票并落存。
+// 上游在每个成功响应里铸造/轮换该 blob（正版 Codex 客户端也是这么收票的），
+// 所以这里零额外上游流量。内存立即更新；落库按账号节流并异步进行（与 codex
+// usage 快照同一模式），避免给每条业务请求叠加一次同步写。
+// outboundModel 必须是真正出站的模型名，与注入侧 openAICodexTicketOutboundModel
+// 口径一致；仅捕获门控模型列表内的票。必须在响应已提交（不再 failover）的
+// 成功路径调用。
+func (s *OpenAIGatewayService) captureOpenAICodexTicket(account *Account, outboundModel string, upstream http.Header) {
+	if s == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabled() {
+		return
+	}
+	model := normalizeOpenAICodexTicketModel(outboundModel)
+	if model == "" || !s.openAICodexTicketGatedModel(model) {
+		return
+	}
+	state := extractOpenAICodexTurnState(upstream)
+	if state == "" || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+		return
+	}
+	cfg := s.openAICodexTicketConfig()
+	if cfg.TargetLength > 0 && len(state) != cfg.TargetLength {
+		return
+	}
+	now := time.Now()
+	ticket := &openAICodexTicket{
+		AccountID:  account.ID,
+		Model:      model,
+		State:      state,
+		Length:     len(state),
+		CapturedAt: now,
+		ExpiresAt:  now.Add(time.Duration(cfg.TTLSeconds) * time.Second),
+	}
+	s.openaiCodexTickets.Store(openAICodexTicketKey(account.ID, model), ticket)
+	if s.accountRepo == nil || !s.getCodexTicketPersistThrottle().Allow(account.ID, now) {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
+			openAICodexTicketExtraKey(model): ticket,
+		}); err != nil {
+			logger.L().Warn("openai_codex_ticket persist failed",
+				zap.Int64("account_id", account.ID),
+				zap.String("model", model),
+				zap.Error(err),
+			)
+		}
+	}()
+}
+
 // applyOpenAICodexTicket 在出站请求上覆盖 x-codex-turn-state。
 // 请求路径只注入已捕获的有效门票，不现场打票；无票则返回
-// ErrOpenAICodexTicketUnavailable。打票由后台 harvester 完成。
+// ErrOpenAICodexTicketUnavailable。票的第一来源是真实响应的被动捕获
+// （captureOpenAICodexTicket），后台 harvester 仅 inject 模式下兜底。
 func (s *OpenAIGatewayService) applyOpenAICodexTicket(ctx context.Context, account *Account, model string, h http.Header) error {
 	if s == nil || h == nil || !isOpenAICodexTicketAccount(account) || !s.openAICodexTicketEnabledContext(ctx) || !s.openAICodexTicketInjectEnabledContext(ctx) {
 		return nil
@@ -503,6 +551,12 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	if s == nil || s.accountRepo == nil || ctx.Err() != nil || !s.openAICodexTicketEnabledContext(ctx) {
 		return
 	}
+	// 主动打票只在 inject 模式运行：观察模式（inject=false）仅靠真实响应
+	// 被动捕获攒票，不向 chatgpt.com 发任何合成探测（2026-09-20 空转事故：
+	// 上游 blob 变长后硬校验全部 miss，每号每小时数百发合成 ping 白打还吃 429）。
+	if !s.openAICodexTicketInjectEnabledContext(ctx) {
+		return
+	}
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
 		logger.L().Warn("openai_codex_ticket list accounts failed", zap.Error(err))
@@ -574,7 +628,7 @@ func (s *OpenAIGatewayService) probeOnceOpenAICodexTicket(ctx context.Context, a
 				zap.String("reason", "error"), zap.Error(perr))
 			return nil, nil
 		}
-		if status != http.StatusOK || state == "" || len(state) != cfg.TargetLength || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
+		if status != http.StatusOK || state == "" || (cfg.TargetLength > 0 && len(state) != cfg.TargetLength) || !strings.HasPrefix(state, openAICodexTicketStatePrefix) {
 			logger.L().Info("openai_codex_ticket probe miss",
 				zap.Int64("account_id", account.ID), zap.String("model", model),
 				zap.Int("http", status), zap.Int("len", len(state)))
