@@ -590,6 +590,7 @@ func TestRefreshOpenAICodexTickets_ConcurrentModelsPreserveAccountSnapshot(t *te
 	repo := &codexTicketRefreshRepo{accounts: []Account{*account}}
 	upstream := &codexTicketConcurrentUpstream{ready: make(chan struct{})}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, Inject: true, HarvestProxyURL: "socks5h://proxy.example.com:1080"}, upstream)
+	svc.settingService = ticketEnforceSettings()
 	svc.accountRepo = repo
 	svc.refreshOpenAICodexTickets(context.Background())
 	require.Equal(t, int64(2), upstream.started.Load())
@@ -754,6 +755,18 @@ func TestCaptureOpenAICodexTicket_DisabledNoop(t *testing.T) {
 func TestCodexTicketHarvesterSkipsObserveMode(t *testing.T) {
 	upstream := &httpUpstreamRecorder{}
 	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, Inject: false, TTLSeconds: 3600}, upstream)
+	account := ticketTestAccount(41)
+	account.Status = StatusActive
+	svc.accountRepo = &codexTicketLifecycleRepo{account: *account}
+
+	svc.refreshOpenAICodexTickets(context.Background())
+	require.Empty(t, upstream.requests)
+}
+
+// 演练模式（inject=true, dry_run 默认开）：只观察请求侧决策，同样不发合成探测。
+func TestCodexTicketHarvesterSkipsDryRunMode(t *testing.T) {
+	upstream := &httpUpstreamRecorder{}
+	svc := ticketTestService(t, config.OpenAICodexTicketConfig{Enabled: true, Inject: true, TTLSeconds: 3600}, upstream)
 	account := ticketTestAccount(41)
 	account.Status = StatusActive
 	svc.accountRepo = &codexTicketLifecycleRepo{account: *account}

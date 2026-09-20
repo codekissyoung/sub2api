@@ -958,6 +958,10 @@ func (s *OpenAIGatewayService) refreshOpenAICodexTickets(ctx context.Context) {
 	if !s.openAICodexTicketInjectEnabledContext(ctx) {
 		return
 	}
+	// 演练模式同样不主动打票：dry_run 只观察请求侧决策，合成探测零发送。
+	if s.openAICodexTicketInjectDryRun(ctx) {
+		return
+	}
 	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformOpenAI)
 	if err != nil {
 		logger.L().Warn("openai_codex_ticket list accounts failed", zap.Error(err))
