@@ -1187,9 +1187,14 @@ export interface Account {
       available_count?: number
       credits?: { expires_at?: string }[]
     }
-		// 手动 RT 轮换成功时间（UTC RFC3339）；OpenAI RT 为不透明格式，运维以此作为链到手锚点
-		rt_rotated_at?: string
-		auto_reset_credit_enabled?: boolean
+    // 手动 RT 轮换成功时间（UTC RFC3339）；OpenAI RT 为不透明格式，运维以此作为链到手锚点
+    rt_rotated_at?: string
+    codex_credits_snapshot?: {
+      credits: { has_credits: boolean; unlimited: boolean; balance: string | null } | null
+      fetched_at: number
+    }
+    codex_referral_snapshot?: import('./openaiReferrals').OpenAIReferralEligibility | null
+    auto_reset_credit_enabled?: boolean
     auto_reset_credit_5h_threshold?: number
     auto_reset_credit_7d_threshold?: number
     codex_auto_reset_credit_state?: {
