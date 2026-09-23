@@ -11,9 +11,16 @@
 # costs ~30s instead of a full rebuild.
 #
 # Usage:   deploy/ice-do-db/deploy.sh [host ...]
+#          deploy/ice-do-db/deploy.sh --verify-only [host ...]
 #          default hosts: ice-do-db ice-do-web-2
 # Env:     SKIP_TESTS=1  SKIP_BACKUP=1 (skip the one-time DB backup)
 #          ALLOW_DIRTY=1
+#
+# --verify-only is a read-only audit: it prints each host's live binary,
+# unit state and route probes, and FAILS when the hosts disagree on the
+# binary. Version drift between hosts is otherwise invisible — on
+# 2026-09-23 ice-do-db sat two days behind ice-do-web-2 because an earlier
+# run only reached one host, and nothing reported it.
 set -euo pipefail
 
 DEPLOY_DIR="/home/iec/deploy"
@@ -30,6 +37,12 @@ listen_url() {
   esac
 }
 
+VERIFY_ONLY=0
+if [[ "${1:-}" == "--verify-only" ]]; then
+  VERIFY_ONLY=1
+  shift
+fi
+
 if [[ $# -gt 0 ]]; then
   HOSTS=("$@")
 else
@@ -41,6 +54,39 @@ done
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
+
+if [[ "$VERIFY_ONLY" == "1" ]]; then
+  echo "==> verify-only: auditing ${HOSTS[*]} (read-only, nothing is deployed)"
+  echo "    repo HEAD: $(git rev-parse --short=9 HEAD) ($(git rev-parse --abbrev-ref HEAD))"
+  seen=""
+  overall=0
+  for h in "${HOSTS[@]}"; do
+    listen="$(listen_url "$h")"
+    line="$(ssh -o BatchMode=yes "$h" "
+      bin=\$(basename \"\$(readlink -f '${DEPLOY_DIR}/bin/sub2api' 2>/dev/null)\" 2>/dev/null || echo unknown)
+      unit=\$(systemctl is-active sub2api 2>/dev/null || echo inactive)
+      health=\$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' '${listen}/health' 2>/dev/null || echo 000)
+      page=\$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' '${listen}${PAGE_PROBE}' 2>/dev/null || echo 000)
+      echo \"\$bin \$unit \$health \$page\"" 2>/dev/null || echo "unreachable - - -")"
+    read -r bin unit health page <<<"$line"
+    echo "    ${h}: ${bin} unit=${unit} health=${health} ${PAGE_PROBE}=${page}"
+    [[ "$unit" == "active" && "$health" == "200" && "$page" == "200" ]] || overall=1
+    case "$seen" in
+      "") seen="$bin" ;;
+      "$bin") ;;
+      *) overall=1; echo "    DRIFT: ${h} runs ${bin}, an earlier host runs ${seen}" >&2 ;;
+    esac
+  done
+  public_code="$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' "${PUBLIC_URL}${PAGE_PROBE}" 2>/dev/null || echo 000)"
+  echo "    public ${PUBLIC_URL}${PAGE_PROBE}: ${public_code}"
+  [[ "$public_code" == "200" ]] || overall=1
+  if [[ "$overall" == "0" ]]; then
+    echo "==> verify-only PASSED: every host runs ${seen} and serves both routes"
+    exit 0
+  fi
+  echo "==> verify-only FAILED; redeploy the lagging host with: deploy/ice-do-db/deploy.sh <host>" >&2
+  exit 1
+fi
 
 echo "==> 0/6 preflight"
 if [[ "${ALLOW_DIRTY:-0}" != "1" ]]; then

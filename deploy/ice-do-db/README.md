@@ -9,9 +9,17 @@ public hostname — `ice-do-db` (10.124.0.3:8320) and `ice-do-web-2`
 Deploy builds ONCE and pushes the same binary to both hosts in turn:
 
 ```bash
-deploy/ice-do-db/deploy.sh              # build once, deploy ice-do-db + ice-do-web-2
-deploy/ice-do-db/deploy.sh ice-do-db    # single host only
+deploy/ice-do-db/deploy.sh                 # build once, deploy ice-do-db + ice-do-web-2
+deploy/ice-do-db/deploy.sh ice-do-db       # single host only
+deploy/ice-do-db/deploy.sh --verify-only   # read-only audit, no build, no deploy
 ```
+
+`--verify-only` prints each host's live binary, unit state, `/health` and
+`/admin/accounts` codes plus the public route, and exits non-zero when the
+hosts disagree on the binary or a probe fails. Nothing else reports that
+drift: on 2026-09-23 `ice-do-db` was two days behind `ice-do-web-2` because
+an earlier run only reached one host. Run it after any interrupted or
+errored release, and before assuming production runs the newest commit.
 
 The shared database is backed up once (on `ice-do-db`) before any host is
 touched; `SKIP_BACKUP=1` skips it. The second host costs ~30s (upload +
