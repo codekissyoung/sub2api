@@ -27,6 +27,8 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('gpt-5.3-codex-spark')
     expect(models).not.toContain('gpt-image-1')
     expect(models).not.toContain('gpt-image-1.5')
+    expect(models).toContain('gpt-6-sol')
+    expect(models).toContain('gpt-6-luna')
   })
 
   it('openai 预设映射包含 GPT-6 别名和 Astra', () => {
@@ -60,6 +62,8 @@ describe('useModelWhitelist', () => {
     expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5-1')
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5')
     expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5')
+    expect(getModelsByPlatform('claude')).toContain('claude-opus-5-5')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-5-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
     expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
   })
