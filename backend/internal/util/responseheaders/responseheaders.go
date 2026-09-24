@@ -37,6 +37,31 @@ var defaultAllowed = map[string]struct{}{
 	"x-reasoning-included": {},
 }
 
+// defaultAllowedPrefixes 按前缀放行的响应头（ice）。OpenAI/Codex 在响应头里下发
+// 账号级信号——x-codex-*（用量窗口、套餐、active limit、credits、安全缓冲等）、
+// x-base-model-*（gpt-reserve 这类预留额度）——下游 relay 靠它们按号监控降级。
+// 用前缀而不是逐个列名：上游新加的同族头自动透传，relay 侧才能第一时间发现。
+var defaultAllowedPrefixes = []string{"x-codex-", "x-base-model-"}
+
+// prefixExcluded 命中前缀但不走通用透传的头。x-codex-turn-state 由
+// service/openai_codex_turn_state.go 带铸造账号溯源显式回传，这里不插手。
+var prefixExcluded = map[string]struct{}{
+	"x-codex-turn-state": {},
+}
+
+// isPrefixAllowed 判断小写头名是否属于按前缀放行的账号级信号头。
+func isPrefixAllowed(lower string) bool {
+	if _, excluded := prefixExcluded[lower]; excluded {
+		return false
+	}
+	for _, prefix := range defaultAllowedPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // hopByHopHeaders 是跳过的 hop-by-hop 头部，这些头部由 HTTP 库自动处理
 var hopByHopHeaders = map[string]struct{}{
 	"content-length":    {},
@@ -96,7 +121,7 @@ func FilterHeaders(src http.Header, filter *CompiledHeaderFilter) http.Header {
 		if _, blocked := filter.forceRemove[lower]; blocked {
 			continue
 		}
-		if _, ok := filter.allowed[lower]; !ok {
+		if _, ok := filter.allowed[lower]; !ok && !isPrefixAllowed(lower) {
 			continue
 		}
 		// 跳过 hop-by-hop 头部，这些由 HTTP 库自动处理
@@ -111,6 +136,13 @@ func FilterHeaders(src http.Header, filter *CompiledHeaderFilter) http.Header {
 }
 
 func WriteFilteredHeaders(dst http.Header, src http.Header, filter *CompiledHeaderFilter) {
+	// 前缀放行的是账号级信号：先清掉 dst 上已有的同族头，failover 换号时上一个
+	// 账号的值不会残留到最终响应上（与 X-Pool-Account 的最终归属保持一致）。
+	for key := range dst {
+		if isPrefixAllowed(strings.ToLower(key)) {
+			dst.Del(key)
+		}
+	}
 	filtered := FilterHeaders(src, filter)
 	for key, values := range filtered {
 		for _, value := range values {
