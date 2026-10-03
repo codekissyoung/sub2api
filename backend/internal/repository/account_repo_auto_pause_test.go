@@ -38,7 +38,7 @@ func TestAutoPauseExpiredAccountsEnqueuesAffectedAccounts(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	now := time.Now()
-	mock.ExpectQuery(`(?s)UPDATE accounts.*RETURNING id`).
+	mock.ExpectQuery(`(?s)UPDATE accounts.*subscription_expires_at.*RETURNING id`).
 		WithArgs(now).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(11)).AddRow(int64(29)))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)")).
@@ -59,7 +59,7 @@ func TestAutoPauseExpiredAccountsSkipsOutboxWithoutChanges(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	now := time.Now()
-	mock.ExpectQuery(`(?s)UPDATE accounts.*RETURNING id`).
+	mock.ExpectQuery(`(?s)UPDATE accounts.*subscription_expires_at.*RETURNING id`).
 		WithArgs(now).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 

@@ -2108,7 +2108,8 @@ func (r *accountRepository) ListSchedulableCapacityByGroupIDs(ctx context.Contex
 			AND a.status = $2
 			AND a.schedulable = TRUE
 			AND (a.temp_unschedulable_until IS NULL OR a.temp_unschedulable_until <= $3)
-			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE)
+			AND (a.expires_at IS NULL OR a.expires_at > $3 OR a.auto_pause_on_expired = FALSE
+				OR `+credentialSubscriptionAliveSQL("a", "$3")+`)
 			AND (a.overload_until IS NULL OR a.overload_until <= $3)
 			AND (a.rate_limit_reset_at IS NULL OR a.rate_limit_reset_at <= $3)
 		ORDER BY ag.group_id ASC, ag.priority ASC, a.priority ASC, a.id ASC
@@ -2721,6 +2722,7 @@ func (r *accountRepository) AutoPauseExpiredAccounts(ctx context.Context, now ti
 			AND auto_pause_on_expired = TRUE
 			AND expires_at IS NOT NULL
 			AND expires_at <= $1
+			AND NOT `+credentialSubscriptionAliveSQL("accounts", "$1")+`
 		RETURNING id
 	`, now)
 	if err != nil {
@@ -3463,7 +3465,36 @@ func notExpiredPredicate(now time.Time) dbpredicate.Account {
 		dbaccount.ExpiresAtIsNil(),
 		dbaccount.ExpiresAtGT(now),
 		dbaccount.AutoPauseOnExpiredEQ(false),
+		credentialSubscriptionAlivePredicate(now),
 	)
+}
+
+// credentialSubscriptionAlivePredicate 表达「凭据证明订阅仍存活」：
+// credentials.subscription_expires_at 可解析为时间戳且晚于 now。
+// accounts.expires_at 只在创建/编辑时写入、从不随订阅续期回写；凭据里的订阅截止
+// 随 OAuth 刷新持续更新，是权威来源。所有按 expires_at 判定过期的路径都必须让位于
+// 该证据（2026-10-04 事故：95-98 订阅已续到 10-19/20，仅因 expires_at 滞留 09-30
+// 被 auto-pause 摘出调度）。pg_input_is_valid（PG16+）保证脏值只让证据不成立
+// （退回按字段判定），不会把整条语句打挂。
+func credentialSubscriptionAlivePredicate(now time.Time) dbpredicate.Account {
+	return dbpredicate.Account(func(s *entsql.Selector) {
+		col := s.C(dbaccount.FieldCredentials) + "->>'subscription_expires_at'"
+		s.Where(entsql.ExprP(
+			"("+col+" IS NOT NULL"+
+				" AND pg_input_is_valid(BTRIM("+col+"), 'timestamp with time zone')"+
+				" AND BTRIM("+col+")::timestamptz > ?)",
+			now,
+		))
+	})
+}
+
+// credentialSubscriptionAliveSQL 与上面的 ent 版同语义，供裸 SQL 查询使用。
+// alias 为 accounts 表的限定符（如 "a"），nowArg 为时间参数的占位符（如 "$3"）。
+func credentialSubscriptionAliveSQL(alias string, nowArg string) string {
+	col := alias + ".credentials->>'subscription_expires_at'"
+	return "(" + col + " IS NOT NULL" +
+		" AND pg_input_is_valid(BTRIM(" + col + "), 'timestamp with time zone')" +
+		" AND BTRIM(" + col + ")::timestamptz > " + nowArg + ")"
 }
 
 func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (map[int64]*service.Proxy, error) {
