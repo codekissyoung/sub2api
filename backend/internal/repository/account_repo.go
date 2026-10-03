@@ -3465,7 +3465,7 @@ func notExpiredPredicate(now time.Time) dbpredicate.Account {
 		dbaccount.ExpiresAtIsNil(),
 		dbaccount.ExpiresAtGT(now),
 		dbaccount.AutoPauseOnExpiredEQ(false),
-		credentialSubscriptionAlivePredicate(now),
+		credentialSubscriptionAlivePredicate(),
 	)
 }
 
@@ -3476,14 +3476,13 @@ func notExpiredPredicate(now time.Time) dbpredicate.Account {
 // 该证据（2026-10-04 事故：95-98 订阅已续到 10-19/20，仅因 expires_at 滞留 09-30
 // 被 auto-pause 摘出调度）。pg_input_is_valid（PG16+）保证脏值只让证据不成立
 // （退回按字段判定），不会把整条语句打挂。
-func credentialSubscriptionAlivePredicate(now time.Time) dbpredicate.Account {
+func credentialSubscriptionAlivePredicate() dbpredicate.Account {
 	return dbpredicate.Account(func(s *entsql.Selector) {
 		col := s.C(dbaccount.FieldCredentials) + "->>'subscription_expires_at'"
 		s.Where(entsql.ExprP(
-			"("+col+" IS NOT NULL"+
-				" AND pg_input_is_valid(BTRIM("+col+"), 'timestamp with time zone')"+
-				" AND BTRIM("+col+")::timestamptz > ?)",
-			now,
+			"(" + col + " IS NOT NULL" +
+				" AND pg_input_is_valid(BTRIM(" + col + "), 'timestamp with time zone')" +
+				" AND BTRIM(" + col + ")::timestamptz > NOW())",
 		))
 	})
 }
