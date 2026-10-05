@@ -478,7 +478,9 @@ func TestTryModelFilePricing_Success(t *testing.T) {
 	require.InDelta(t, 0.2, *result, 1e-12)
 }
 
-func TestTryModelFilePricing_Fable51HasNoImplicitReasoningMultiplier(t *testing.T) {
+// ice: 上游的同位测试是 ..._Fable51HasNoImplicitReasoningMultiplier（断言 max 与 xhigh 同价）；
+// 本分支在运维未配置时给 Fable 5.1 的 max 档兜底 3 倍（见 AGENTS.md 分歧清单）。
+func TestTryModelFilePricing_Fable51MaxDefaultsToTripleMultiplier(t *testing.T) {
 	bs := newTestBillingServiceWithPrices(map[string]*ModelPricing{
 		"claude-fable-5-1": {InputPricePerToken: 0.001},
 	})
@@ -487,7 +489,7 @@ func TestTryModelFilePricing_Fable51HasNoImplicitReasoningMultiplier(t *testing.
 	max := tryModelFilePricing(bs, "claude-fable-5-1", tokens, "", time.Time{}, true, "max")
 	require.NotNil(t, standard)
 	require.NotNil(t, max)
-	require.Equal(t, *standard, *max)
+	require.InDelta(t, *standard*3, *max, 1e-12)
 }
 
 func TestTryModelFilePricing_AppliesLongContextPricing(t *testing.T) {

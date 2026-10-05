@@ -610,7 +610,9 @@ func TestGetModelDefaultPricing_ReturnsFable51CacheTTLs(t *testing.T) {
 	require.InDelta(t, 12.5e-6, body.Data.CacheWritePrice, 1e-12)
 	require.NotNil(t, body.Data.CacheWrite1hPrice)
 	require.InDelta(t, 20e-6, *body.Data.CacheWrite1hPrice, 1e-12)
-	require.Empty(t, body.Data.ReasoningEffortMultipliers)
+	// ice: 上游这里断言「没有隐式倍率」；本分支在运维未配置时给 Fable 5.1 的 max 档
+	// 兜底 3 倍（见 AGENTS.md 分歧清单），所以期望值与上游不同。
+	require.Equal(t, map[string]float64{"max": 3}, body.Data.ReasoningEffortMultipliers)
 }
 
 func TestGetModelDefaultPricing_OmitsUnsupportedCache1hPrice(t *testing.T) {

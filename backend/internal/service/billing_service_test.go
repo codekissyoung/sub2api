@@ -1856,7 +1856,9 @@ func TestGetModelPricing_Fable51FallbackPricing(t *testing.T) {
 	require.InDelta(t, 12.5e-6, pricing.CacheCreation5mPrice, 1e-12)
 	require.InDelta(t, 20e-6, pricing.CacheCreation1hPrice, 1e-12)
 	require.InDelta(t, 0.25e-6, pricing.CacheReadPricePerToken, 1e-12)
-	require.Empty(t, pricing.ReasoningEffortMultipliers)
+	// ice: 上游这里断言「没有隐式倍率」；本分支在运维未配置时给 Fable 5.1 的 max 档
+	// 兜底 3 倍（见 AGENTS.md 分歧清单），所以期望值与上游不同。
+	require.Equal(t, map[string]float64{"max": 3}, pricing.ReasoningEffortMultipliers)
 }
 
 func TestGetModelPricingWithChannel_CacheReadPriceAffectsPriority(t *testing.T) {

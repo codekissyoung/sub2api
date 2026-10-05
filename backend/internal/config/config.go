@@ -2476,6 +2476,10 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_codex_ticket.enabled", false)
 	viper.SetDefault("gateway.openai_codex_ticket.inject", true)
 	viper.SetDefault("gateway.openai_codex_ticket.target_length", 0)
+	// <=0 走服务内置默认值（292 / 312 / 600）；这里注册零值只为让对应环境变量可达。
+	viper.SetDefault("gateway.openai_codex_ticket.normal_length", 0)
+	viper.SetDefault("gateway.openai_codex_ticket.degraded_length", 0)
+	viper.SetDefault("gateway.openai_codex_ticket.inject_min_remaining_seconds", 0)
 	viper.SetDefault("gateway.openai_codex_ticket.ttl_seconds", 3600)
 	viper.SetDefault("gateway.openai_codex_ticket.refresh_before_seconds", 600)
 	viper.SetDefault("gateway.openai_codex_ticket.harvest_proxy_url", "")
