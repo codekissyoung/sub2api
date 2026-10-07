@@ -62,7 +62,7 @@ const (
 	// 陈旧版本会被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
 	// 官方身份时整体回退到本常量，因此它必须跟随官方 CLI 的当前发布版本，
 	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
-	codexCLIVersion = "0.146.0"
+	codexCLIVersion = "0.160.0"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	// 被动捕获的 turn-state 门票同理：内存立即生效，落库仅供重启恢复，按账号节流。

@@ -450,7 +450,10 @@ func TestHarvestOpenAICodexTicket_StopsAt292AndUsesHarvestProxy(t *testing.T) {
 	require.Equal(t, "socks5h://user:pass@harvest.example:31", upstream.lastProxyURL)
 	require.Len(t, upstream.requests, 2)
 	require.Empty(t, upstream.requests[0].Header.Get(openAICodexTurnStateHeader))
-	require.Equal(t, openAICodexAstraMinVersion, upstream.requests[0].Header.Get("version"))
+	// The harvest identity only lifts the version when the ambient one is below
+	// the Astra floor; with codexCLIVersion >= the floor it is forwarded as is.
+	require.GreaterOrEqual(t, CompareVersions(upstream.requests[0].Header.Get("version"), openAICodexAstraMinVersion), 0)
+	require.Equal(t, codexCLIVersion, upstream.requests[0].Header.Get("version"))
 	require.Equal(t, HTTPUpstreamProfileOpenAIHarvest, HTTPUpstreamProfileFromContext(upstream.requests[0].Context()))
 	require.True(t, upstream.requests[0].Close)
 }
