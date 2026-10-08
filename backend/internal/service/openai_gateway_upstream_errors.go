@@ -241,6 +241,28 @@ func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 	return !gjson.ValidBytes(upstreamBody) && match(string(upstreamBody))
 }
 
+// isOpenAIEncryptedContentReplayError matches the Codex backend's 400 for
+// reasoning encrypted_content that cannot be decrypted/verified on replay
+// ("The encrypted content <id> could not be verified. Reason: Encrypted
+// content could not be decrypted or parsed."). The blob is encrypted under
+// the serving ChatGPT account's keys, so in a pool this fires when a
+// conversation hops accounts mid-session (failover, pool rebalance, pool
+// migration). The request body is otherwise fine: retrying with the
+// undecryptable reasoning items dropped is the intended recovery.
+func isOpenAIEncryptedContentReplayError(statusCode int, upstreamBody []byte) bool {
+	if statusCode != http.StatusBadRequest || len(upstreamBody) == 0 {
+		return false
+	}
+	msg := strings.ToLower(extractUpstreamErrorMessage(upstreamBody))
+	if msg == "" {
+		return false
+	}
+	return strings.Contains(msg, "encrypted content") &&
+		(strings.Contains(msg, "could not be verified") ||
+			strings.Contains(msg, "could not be decrypted") ||
+			strings.Contains(msg, "could not be parsed"))
+}
+
 func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool {
 	switch statusCode {
 	case 401, 402, 403, 405, 408, 429, 529:

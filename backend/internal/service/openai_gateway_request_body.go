@@ -728,6 +728,38 @@ func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, 
 	return normalized, true, nil
 }
 
+// dropOpenAIReasoningEncryptedContentItems removes replay items that carry
+// encrypted_content (reasoning / compaction / compaction_summary — the same
+// set the invalid-lineage store tracks) from the input array. The Codex
+// backend encrypts those blobs under the serving account's keys, so after an
+// account hop the receiving account answers 400 "encrypted content could not
+// be verified / decrypted". Dropping the items mirrors the store=false replay
+// path, which already drops reasoning items that lack a usable
+// encrypted_content; the remaining history keeps the assistant's visible
+// conclusions.
+func dropOpenAIReasoningEncryptedContentItems(body []byte) ([]byte, bool) {
+	input := parseRawJSONView(body).Get("input")
+	if !input.IsArray() {
+		return body, false
+	}
+	items := make([]string, 0)
+	changed := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		if item.IsObject() &&
+			openAIEncryptedLineageItemType(item.Get("type").String()) &&
+			item.Get("encrypted_content").Type == gjson.String {
+			changed = true
+			return true
+		}
+		items = append(items, item.Raw)
+		return true
+	})
+	if !changed {
+		return body, false
+	}
+	return replaceOpenAIRawInput(body, input, items), true
+}
+
 func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse bool) ([]byte, bool, error) {
 	if !knownStoreFalse && gjson.GetBytes(body, "store").Type != gjson.False {
 		return body, false, nil

@@ -353,6 +353,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	agentTaskRecoveryTried := false
 	compactModelFallbackRetried := false
+	encryptedContentRetryTried := false
 	rejectedFieldRetryState := openAIResponsesRejectedFieldRetryStateForRequest(c, body)
 	var resp *http.Response
 	var usage *OpenAIUsage
@@ -423,6 +424,17 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			// 透传模式默认保持原样代理；容量错误以及 API-key 上游的瞬时
 			// 5xx 应先触发多账号 failover，且此时尚未写入下游响应。
 			// probeBody 已在上方任务探测时读取过一次，直接复用避免重复读取。
+			if isOpenAIEncryptedContentReplayError(resp.StatusCode, probeBody) && !encryptedContentRetryTried {
+				encryptedContentRetryTried = true
+				// 记录失效密文摘要，同会话后续轮在进场侧直接剥离，不再重复
+				// 「被拒→重试」循环（与 WS bridge 的 lineage 学习同一份存储）。
+				s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(c, body, "passthrough_invalid_encrypted_lineage_mark", account.ID, 0)
+				if retryBody, dropped := dropOpenAIReasoningEncryptedContentItems(body); dropped {
+					body = retryBody
+					logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request once with undecryptable reasoning items dropped (account: %s)", account.Name)
+					continue
+				}
+			}
 			if shouldFailoverOpenAIPassthroughResponse(account, resp.StatusCode, probeBody) {
 				return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body, probeBody)
 			}
