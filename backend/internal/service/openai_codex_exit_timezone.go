@@ -74,22 +74,6 @@ func rewriteCodexExitTimezoneForAccount(account *Account, body []byte) ([]byte, 
 	if tz == "" {
 		return body, false
 	}
-	// 观测（上线初期）：配了出口时区的账号每次请求打一条，确认链路真的踩到这里。
-	logger.LegacyPrintf("service.openai_gateway", "[TZ-REWRITE-ENTER] account=%d exit_tz=%s", account.ID, tz)
-	// 诊断：打出 timezone 在 body 里的实际字节形态（标签骨架，不含用户内容）。
-	if idx := bytes.Index(body, []byte("timezone")); idx >= 0 {
-		lo := idx - 16
-		if lo < 0 {
-			lo = 0
-		}
-		hi := idx + 48
-		if hi > len(body) {
-			hi = len(body)
-		}
-		logger.LegacyPrintf("service.openai_gateway", "[TZ-REWRITE-SCAN] account=%d ctx=%q", account.ID, body[lo:hi])
-	} else {
-		logger.LegacyPrintf("service.openai_gateway", "[TZ-REWRITE-SCAN] account=%d no-timezone-in-body len=%d", account.ID, len(body))
-	}
 	// environment_context 块指纹（双形态：<cwd> 与其转义形态 <cwd>）。
 	hasEnvBlock := bytes.Contains(body, []byte("<cwd>")) || bytes.Contains(body, []byte(`\u003ccwd\u003e`))
 	if !hasEnvBlock {
