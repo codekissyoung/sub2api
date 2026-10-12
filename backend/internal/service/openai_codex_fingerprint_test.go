@@ -66,11 +66,11 @@ func TestGetCodexFingerprintMode(t *testing.T) {
 		{"非 OAuth 账号", &Account{Platform: PlatformOpenAI, Type: "api_key"}, codexFingerprintOff},
 		{"OpenAI setup token", &Account{Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Extra: map[string]any{codexFingerprintModeExtraKey: "session"}}, codexFingerprintSession},
 		{"Anthropic setup token", &Account{Platform: PlatformAnthropic, Type: AccountTypeSetupToken, Extra: map[string]any{codexFingerprintModeExtraKey: "session"}}, codexFingerprintOff},
-		// 收敛是显式 opt-in：缺省/空/非法一律 off（#5610）。存量账号普遍没有这个
-		// extra 键，升级不得把它们静默切进收敛。
-		{"无 extra 默认 off", newTestOAuthAccount(1, nil), codexFingerprintOff},
-		{"空值默认 off", newTestOAuthAccount(1, map[string]any{codexFingerprintModeExtraKey: ""}), codexFingerprintOff},
-		{"非法值默认 off", newTestOAuthAccount(1, map[string]any{codexFingerprintModeExtraKey: "invalid"}), codexFingerprintOff},
+		// ice: 缺省/空/非法一律按 codexFingerprintDefaultMode（session）处理；
+		// 上游此处期望 off（#5610）。
+		{"无 extra 默认 session", newTestOAuthAccount(1, nil), codexFingerprintSession},
+		{"空值默认 session", newTestOAuthAccount(1, map[string]any{codexFingerprintModeExtraKey: ""}), codexFingerprintSession},
+		{"非法值默认 session", newTestOAuthAccount(1, map[string]any{codexFingerprintModeExtraKey: "invalid"}), codexFingerprintSession},
 		{"显式 off", newTestOAuthAccount(1, map[string]any{codexFingerprintModeExtraKey: "off"}), codexFingerprintOff},
 		{"device", newTestOAuthAccount(1, map[string]any{codexFingerprintModeExtraKey: "device"}), codexFingerprintDevice},
 		{"session", newTestOAuthAccount(1, map[string]any{codexFingerprintModeExtraKey: "session"}), codexFingerprintSession},
@@ -131,11 +131,57 @@ func TestResolveCodexFingerprintIDsFromRequest_ExplicitOff(t *testing.T) {
 	assert.Nil(t, ids, "显式 off 模式应返回 nil")
 }
 
-// 未显式配置的存量账号不得被收敛（#5610）：默认返回 nil，出站身份保持
-// v0.1.175 之前的客户端原值。
-func TestResolveCodexFingerprintIDsFromRequest_DefaultIsOff(t *testing.T) {
+// ice: 未显式配置的账号按 session 收敛（上游此处期望 nil，#5610）。
+func TestResolveCodexFingerprintIDsFromRequest_DefaultIsSession(t *testing.T) {
 	account := newTestOAuthAccount(1, nil)
-	assert.Nil(t, resolveCodexFingerprintIDsFromRequest(account, nil), "无 extra 应视为 off")
+	ids := resolveCodexFingerprintIDsFromRequest(account, nil)
+	require.NotNil(t, ids, "无 extra 应按 session 收敛")
+	assert.Equal(t, codexFingerprintSession, ids.mode)
+	assert.NotEmpty(t, ids.installationID)
+	assert.NotEmpty(t, ids.sessionID)
+}
+
+// 没有系统种子的账号无法派生收敛 ID，缺省 session 也只能跳过（与显式开启同一规则），
+// 所以建号 / 编辑路径必须补种子。
+func TestResolveCodexFingerprintIDsFromRequest_DefaultWithoutSeedSkips(t *testing.T) {
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	assert.Nil(t, resolveCodexFingerprintIDsFromRequest(account, nil))
+}
+
+func TestPrepareCodexFingerprintExtraForCreate_DefaultModeGetsSeed(t *testing.T) {
+	for _, accountType := range []string{AccountTypeOAuth, AccountTypeSetupToken} {
+		t.Run(accountType, func(t *testing.T) {
+			prepared := prepareCodexFingerprintExtraForCreate(PlatformOpenAI, accountType, nil)
+			seed, ok := codexFingerprintSeed(prepared)
+			require.True(t, ok, "缺省 session 建号必须生成种子")
+			require.NotEmpty(t, seed)
+			_, explicit := explicitCodexFingerprintMode(prepared)
+			assert.False(t, explicit, "种子之外不应替调用方写入模式键")
+		})
+	}
+	explicitOff := prepareCodexFingerprintExtraForCreate(PlatformOpenAI, AccountTypeOAuth, map[string]any{codexFingerprintModeExtraKey: "off"})
+	_, hasSeed := codexFingerprintSeed(explicitOff)
+	assert.False(t, hasSeed, "显式 off 不需要种子")
+	assert.Nil(t, prepareCodexFingerprintExtraForCreate(PlatformOpenAI, AccountTypeAPIKey, nil), "API key 账号不收敛")
+}
+
+func TestPrepareCodexFingerprintExtraForUpdate_DefaultModeBackfillsSeed(t *testing.T) {
+	account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	prepared := prepareCodexFingerprintExtraForUpdate(account, map[string]any{"other": true})
+	_, ok := codexFingerprintSeed(prepared)
+	require.True(t, ok, "缺省 session 的账号编辑时应补种子")
+}
+
+// key 级 extra 更新（用量快照、门票等）不碰模式键时必须保持普通合并 SQL，
+// 只有显式开启收敛的更新才原子补种子。
+func TestShouldEnsureCodexFingerprintSeedForExtraUpdates_ExplicitOnly(t *testing.T) {
+	assert.False(t, ShouldEnsureCodexFingerprintSeedForExtraUpdates(nil))
+	assert.False(t, ShouldEnsureCodexFingerprintSeedForExtraUpdates(map[string]any{"codex_usage_updated_at": "x"}))
+	assert.False(t, ShouldEnsureCodexFingerprintSeedForExtraUpdates(map[string]any{codexFingerprintModeExtraKey: "off"}))
+	assert.False(t, ShouldEnsureCodexFingerprintSeedForExtraUpdates(map[string]any{codexFingerprintModeExtraKey: "invalid"}))
+	for _, mode := range []string{"device", "session", "full"} {
+		assert.True(t, ShouldEnsureCodexFingerprintSeedForExtraUpdates(map[string]any{codexFingerprintModeExtraKey: mode}), mode)
+	}
 }
 
 // 管理员显式 opt-in 的账号行为不变。

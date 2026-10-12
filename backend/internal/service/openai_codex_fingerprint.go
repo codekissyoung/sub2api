@@ -65,7 +65,7 @@ type codexFingerprintMode string
 
 const (
 	// codexFingerprintOff 不做任何收敛，原样透传客户端标识。
-	// 这是默认值：收敛是显式 opt-in 的（见 GetCodexFingerprintMode）。
+	// ice: 只在管理员显式选择时生效；未设置的账号走 codexFingerprintDefaultMode。
 	codexFingerprintOff codexFingerprintMode = "off"
 	// codexFingerprintDevice 仅收敛 installation_id 为账号级恒定值。
 	// 上游看到 1 台设备 + 多会话（每用户各自的 session）。
@@ -78,6 +78,13 @@ const (
 	// 上游看到 1 台设备 + 1 会话 + 1 线程，最激进。
 	codexFingerprintFull codexFingerprintMode = "full"
 )
+
+// codexFingerprintDefaultMode 是未显式配置（缺省 / 空值 / 非法值）时的收敛模式。
+// ice 分叉：上游默认 off（#5610），本分支默认 session——所有 OpenAI OAuth 账号
+// 都由多名用户共享，原样透传会让上游在同一账号上看到几十台设备（2026-10-12
+// 实测每号 24h 内 28–51 个不同用户）。显式 off / device / full 仍然生效，作为
+// 单号回退手段。
+const codexFingerprintDefaultMode = codexFingerprintSession
 
 const (
 	codexFingerprintModeExtraKey = "codex_fingerprint_mode"
@@ -110,17 +117,28 @@ func stripCodexFingerprintSeed(extra map[string]any) map[string]any {
 	return stripped
 }
 
-func codexFingerprintModeFromExtra(extra map[string]any) codexFingerprintMode {
+// explicitCodexFingerprintMode 返回 extra 中显式配置的合法收敛模式；
+// 缺省、空值或非法值返回 ok=false。
+func explicitCodexFingerprintMode(extra map[string]any) (codexFingerprintMode, bool) {
 	if extra == nil {
-		return codexFingerprintOff
+		return "", false
 	}
 	raw, _ := extra[codexFingerprintModeExtraKey].(string)
-	switch codexFingerprintMode(strings.TrimSpace(raw)) {
+	switch mode := codexFingerprintMode(strings.TrimSpace(raw)); mode {
 	case codexFingerprintOff, codexFingerprintDevice, codexFingerprintSession, codexFingerprintFull:
-		return codexFingerprintMode(strings.TrimSpace(raw))
+		return mode, true
 	default:
-		return codexFingerprintOff
+		return "", false
 	}
+}
+
+// codexFingerprintModeFromExtra 返回生效的收敛模式：显式配置优先，否则
+// codexFingerprintDefaultMode。
+func codexFingerprintModeFromExtra(extra map[string]any) codexFingerprintMode {
+	if mode, ok := explicitCodexFingerprintMode(extra); ok {
+		return mode
+	}
+	return codexFingerprintDefaultMode
 }
 
 func codexFingerprintModeRequiresSeed(mode codexFingerprintMode) bool {
@@ -184,24 +202,23 @@ func sanitizedCodexFingerprintExtraUpdates(updates map[string]any) map[string]an
 // ShouldEnsureCodexFingerprintSeedForExtraUpdates reports whether a JSONB key-level
 // extra update is enabling Codex fingerprint convergence and therefore must atomically
 // preserve or create the system-managed per-account seed in the repository update.
+// Only an explicit mode in the update counts: key-level updates that do not touch the
+// mode (usage snapshots, tickets, ...) must keep their plain merge SQL.
 func ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates map[string]any) bool {
-	if updates == nil {
-		return false
-	}
-	return codexFingerprintModeRequiresSeed(codexFingerprintModeFromExtra(updates))
+	mode, ok := explicitCodexFingerprintMode(updates)
+	return ok && codexFingerprintModeRequiresSeed(mode)
 }
 
 // GetCodexFingerprintMode 从账号 extra JSON 读取指纹收敛模式。
 //
-// **收敛是显式 opt-in**：未设置、空值或非法值一律按 off 处理，只有管理员
-// 明确配置 device / session / full 才收敛。
+// ice 分叉：未设置、空值或非法值按 codexFingerprintDefaultMode（session）处理；
+// 显式配置的 off / device / session / full 原样生效。
 //
-// 历史：v0.1.175（#5553）把缺省值当作 session，导致升级后存量 OAuth 账号
-// （普遍没有这个 extra 键）的每个非透传请求都被静默改写 installation /
-// session / thread / turn / window 五类标识；#5555、#5556、#5582 报告的额度
-// 缩水都卡在该版本边界，并有"回退 v0.1.173 即恢复"与"新账号开收敛后降额"
-// 的 A/B 实测。上游的配额判定策略不可观测，因此这里取兼容安全的一侧：
-// 不显式 opt-in 就保持 v0.1.175 之前的客户端身份（#5610）。
+// 上游历史：v0.1.175（#5553）也曾把缺省值当作 session，#5555、#5556、#5582
+// 报告额度缩水后上游改回显式 opt-in（#5610）。本分支 2026-10-12 用自己的池子
+// 复核：同期已开 session 的 6 个号与未开的 6 个号，近 3 天缓存命中率分别为
+// 82–86% 与 76–90%，看不出收敛带来的退化，于是由运维拍板改回默认 session。
+// 若再出现额度异常，单号显式设 off 即可回退。
 func (a *Account) GetCodexFingerprintMode() codexFingerprintMode {
 	if a == nil || !a.IsOpenAIOAuthLike() {
 		return codexFingerprintOff
