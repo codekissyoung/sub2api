@@ -29,6 +29,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, filterErr
 	}
 	body = filteredBody
+	// environment_context 时区对齐（账号 extra.codex_exit_timezone 配置时）：
+	// 把客户端真实时区标签（HK/Shanghai 白名单）改写为该账号代理出口时区。
+	// 必须在下方 originalBody 快照之前——透传分支拿的是那份快照。
+	if tzBody, tzChanged := rewriteCodexExitTimezoneForAccount(account, body); tzChanged {
+		body = tzBody
+	}
 	clearGrokResponsesClientToolMapping(c)
 	clearOpenAIResponsesClientToolMapping(c)
 	clearOpenAIResponsesNamespaceNames(c)
