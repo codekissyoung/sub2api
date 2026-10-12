@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"regexp"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 // 账号 extra 键：codex_exit_timezone（IANA 名，如 Asia/Manila / Europe/London）。
@@ -63,6 +65,8 @@ func rewriteCodexExitTimezoneForAccount(account *Account, body []byte) ([]byte, 
 	if tz == "" {
 		return body, false
 	}
+	// 观测（上线初期）：配了出口时区的账号每次请求打一条，确认链路真的踩到这里。
+	logger.LegacyPrintf("service.openai_gateway", "[TZ-REWRITE-ENTER] account=%d exit_tz=%s", account.ID, tz)
 	if !bytes.Contains(body, []byte("<cwd>")) {
 		return body, false
 	}
@@ -74,6 +78,9 @@ func rewriteCodexExitTimezoneForAccount(account *Account, body []byte) ([]byte, 
 		}
 		body = bytes.ReplaceAll(body, needle, []byte("<timezone>"+tz+"</timezone>"))
 		changed = true
+	}
+	if changed {
+		logger.LegacyPrintf("service.openai_gateway", "[TZ-REWRITE-HIT] account=%d exit_tz=%s", account.ID, tz)
 	}
 	return body, changed
 }
