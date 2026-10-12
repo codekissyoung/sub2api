@@ -1,6 +1,8 @@
 package service
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -23,6 +25,36 @@ func TestRewriteCodexExitTimezoneForAccount(t *testing.T) {
 		}
 		if strings.Contains(string(next), "Asia/Hong_Kong") {
 			t.Fatalf("source timezone still present: %s", next)
+		}
+	})
+
+	t.Run("rewrites escaped form after Go json remarshal", func(t *testing.T) {
+		// 生产 body 经 handler 层 Unmarshal/Marshal 后，Go encoding/json 默认把
+		// < > 转义为 < >（HTML 安全），标签呈 <timezone> 形态。
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf) // 默认 EnableHTMLEscape(true)
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(body), &obj); err != nil {
+			t.Fatalf("decode fixture: %v", err)
+		}
+		if err := enc.Encode(obj); err != nil {
+			t.Fatalf("re-encode fixture: %v", err)
+		}
+		escaped := buf.String()
+		if !strings.Contains(escaped, `\u003ctimezone\u003e`) {
+			t.Fatalf("fixture did not come out escaped: %.200s", escaped)
+		}
+		acct := tzAccount(map[string]any{"codex_exit_timezone": "Asia/Manila"}, AccountTypeOAuth)
+		next, changed := rewriteCodexExitTimezoneForAccount(acct, []byte(escaped))
+		if !changed {
+			t.Fatal("expected change on escaped form")
+		}
+		got := string(next)
+		if !strings.Contains(got, `\u003ctimezone\u003eAsia/Manila\u003c/timezone\u003e`) {
+			t.Fatalf("escaped target missing: %.300s", got)
+		}
+		if strings.Contains(got, "Asia/Hong_Kong") {
+			t.Fatalf("source timezone still present: %.300s", got)
 		}
 	})
 

@@ -22,6 +22,15 @@ var codexExitTimezoneSourceValues = []string{
 	"Asia/Shanghai",
 }
 
+// Go encoding/json 默认把 < > & 转义为 < > &（HTML 安全）：请求体
+// 一经 Unmarshal/Marshal 重序列化，environment_context 标签就是转义形态。
+// 两种形态都要认（2026-10-13 首版只认原始形态，生产 body 已被重序列化，
+// 一次没命中——TZ-REWRITE-ENTER 有、HIT 无，靠观测日志抓到）。
+var codexTimezoneTagForms = [][2][]byte{
+	{[]byte("<timezone>"), []byte("</timezone>")},
+	{[]byte(`\u003ctimezone\u003e`), []byte(`\u003c/timezone\u003e`)},
+}
+
 // IANA 时区名形态校验：值会出现在 <timezone> XML 标签里，必须防注入。
 var codexExitTimezoneNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+\-]*(/[A-Za-z0-9_+\-]+){1,2}$`)
 
@@ -67,17 +76,23 @@ func rewriteCodexExitTimezoneForAccount(account *Account, body []byte) ([]byte, 
 	}
 	// 观测（上线初期）：配了出口时区的账号每次请求打一条，确认链路真的踩到这里。
 	logger.LegacyPrintf("service.openai_gateway", "[TZ-REWRITE-ENTER] account=%d exit_tz=%s", account.ID, tz)
-	if !bytes.Contains(body, []byte("<cwd>")) {
+	// environment_context 块指纹（双形态：<cwd> 与其转义形态 <cwd>）。
+	hasEnvBlock := bytes.Contains(body, []byte("<cwd>")) || bytes.Contains(body, []byte(`\u003ccwd\u003e`))
+	if !hasEnvBlock {
 		return body, false
 	}
 	changed := false
 	for _, from := range codexExitTimezoneSourceValues {
-		needle := []byte("<timezone>" + from + "</timezone>")
-		if !bytes.Contains(body, needle) {
-			continue
+		for _, tag := range codexTimezoneTagForms {
+			needle := append(append([]byte{}, tag[0]...), append([]byte(from), tag[1]...)...)
+			if !bytes.Contains(body, needle) {
+				continue
+			}
+			// 同形态写回，不与 body 既有编码形态混排。
+			repl := append(append([]byte{}, tag[0]...), append([]byte(tz), tag[1]...)...)
+			body = bytes.ReplaceAll(body, needle, repl)
+			changed = true
 		}
-		body = bytes.ReplaceAll(body, needle, []byte("<timezone>"+tz+"</timezone>"))
-		changed = true
 	}
 	if changed {
 		logger.LegacyPrintf("service.openai_gateway", "[TZ-REWRITE-HIT] account=%d exit_tz=%s", account.ID, tz)
