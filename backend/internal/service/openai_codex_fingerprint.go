@@ -216,8 +216,9 @@ func ShouldEnsureCodexFingerprintSeedForExtraUpdates(updates map[string]any) boo
 //
 // 上游历史：v0.1.175（#5553）也曾把缺省值当作 session，#5555、#5556、#5582
 // 报告额度缩水后上游改回显式 opt-in（#5610）。本分支 2026-10-12 用自己的池子
-// 复核：同期已开 session 的 6 个号与未开的 6 个号，近 3 天缓存命中率分别为
-// 82–86% 与 76–90%，看不出收敛带来的退化，于是由运维拍板改回默认 session。
+// 复核：10-10 11:15 起已开 session 的 6 个号与同期未开的 6 个号，到 10-12 12:25
+// 的缓存命中率分别为 85.3% 与 87.2%（单号区间 81–88% 与 76–90% 重叠），看不出
+// 收敛带来的退化，于是由运维拍板改回默认 session。缓存命中不等于额度消耗，
 // 若再出现额度异常，单号显式设 off 即可回退。
 func (a *Account) GetCodexFingerprintMode() codexFingerprintMode {
 	if a == nil || !a.IsOpenAIOAuthLike() {
