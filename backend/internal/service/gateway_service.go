@@ -20,7 +20,9 @@ import (
 	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/cespare/xxhash/v2"
@@ -640,7 +642,11 @@ type ForwardResult struct {
 	ServiceTier *string
 
 	// 图片生成计费字段（图片生成模型使用）
-	ImageCount         int    // 生成的图片数量
+	ImageCount int // 生成的图片数量
+	// ImageEndpoint 标记请求来自专用图片端点（/v1/images/*、图片模型端点）。
+	// 分组 image_count_billing 开关只对这类请求生效，混合的 Responses/Chat/WS
+	// 请求带图片工具时仍按 token 计费。
+	ImageEndpoint      bool
 	ImageSize          string // 最终计费尺寸 "1K", "2K", "4K"
 	ImageInputSize     string // 请求中的原始图片尺寸
 	ImageOutputSize    string // 上游响应中的图片尺寸
@@ -1460,6 +1466,12 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	}
 
 	// If no account has model_mapping, return nil (use default)
+	if !hasAnyMapping && platform == PlatformOpenAI {
+		models := filterRetiredOpenAIModelIDs(accounts, openai.DefaultModelIDs())
+		if len(models) != len(openai.DefaultModels) {
+			return models
+		}
+	}
 	if !hasAnyMapping {
 		if s.modelsListCache != nil {
 			s.modelsListCache.Set(cacheKey, []string(nil), s.modelsListCacheTTL)
@@ -1477,6 +1489,12 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 
 	if platform == PlatformOpenAI {
 		models = supplementUnmappedOpenAIModels(accounts, models)
+		models = filterRetiredOpenAIModelIDs(accounts, models)
+		// nil means "use defaults" to listing callers; an empty filtered catalog
+		// must remain authoritative instead of resurrecting retired defaults.
+		if len(models) == 0 {
+			return models
+		}
 	}
 
 	if s.modelsListCache != nil {
@@ -1501,21 +1519,23 @@ func (s *GatewayService) resolveCompositeModelOwnership(ctx context.Context, gro
 		}
 	}
 
-	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, groupID)
+	// 归属取决于配置而非运行时健康：限流/临时不可调度不应让同一模型在
+	// 「唯一归属」与「歧义」之间来回翻转，否则配置错误只会间歇暴露。
+	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(ctx, &groupID, domain.ConcretePlatformIDs(), false)
 	if err != nil {
 		return CompositeModelOwnership{}, err
 	}
 
 	platforms := make(map[string]struct{})
+	ownership := CompositeModelOwnership{}
 	for _, account := range accounts {
-		platform := strings.TrimSpace(account.Platform)
-		if !isConcreteRequestPlatform(platform) || !explicitModelMappingClaims(account, model) {
-			continue
+		if explicitModelMappingClaims(account, model) {
+			platforms[account.Platform] = struct{}{}
+			ownership.OpenAIGatewayOAuthClaimed = ownership.OpenAIGatewayOAuthClaimed ||
+				(account.IsOAuth() && domain.UsesOpenAIGateway(account.Platform))
 		}
-		platforms[platform] = struct{}{}
 	}
 
-	ownership := CompositeModelOwnership{}
 	if len(platforms) == 1 {
 		for platform := range platforms {
 			ownership.TargetPlatform = platform

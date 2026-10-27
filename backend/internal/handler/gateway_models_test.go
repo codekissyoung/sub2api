@@ -324,6 +324,12 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 			Credentials: map[string]any{"model_mapping": map[string]any{alias: "gpt-5.6-sol"}},
 		},
 	}
+	subscriptionDefaults := make([]string, 0)
+	for _, model := range openai.DefaultModelIDs() {
+		if model != "gpt-5.5" {
+			subscriptionDefaults = append(subscriptionDefaults, model)
+		}
+	}
 	tests := []struct {
 		name     string
 		accounts []service.Account
@@ -334,17 +340,18 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 			name:     "unmapped parent and Spark shadow retain defaults and aliases",
 			accounts: accounts,
 			// ice 默认列表已裁剪 gpt-5.3-codex-spark；它经影子账号的显式映射键进入目录。
-			want: append(openai.DefaultModelIDs(), alias, sparkModel),
+			// gpt-5.5 仍按上游订阅目录排除。
+			want: append(append([]string{}, subscriptionDefaults...), alias, sparkModel),
 		},
 		{
 			name:     "unmapped API key account also contributes defaults",
 			accounts: append([]service.Account{{ID: 4, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey}}, accounts[1:]...),
-			want:     append(openai.DefaultModelIDs(), alias, sparkModel),
+			want:     append(append([]string{}, openai.DefaultModelIDs()...), alias, sparkModel),
 		},
 		{
 			name:     "unmapped accounts alone retain default response shape",
 			accounts: accounts[:1],
-			want:     openai.DefaultModelIDs(),
+			want:     subscriptionDefaults,
 		},
 		{
 			name:     "custom list can select defaults and aliases",
@@ -376,7 +383,7 @@ func TestGatewayModels_UnmappedOpenAIAccountsSupplementMappedModels(t *testing.T
 			// ice 默认列表已裁剪 gpt-5.3-codex-spark（relay 入口把它判为 codex_login_only
 			// 直接拒绝，号池不该再对外宣告它），所以上游用例里由默认列表隐含带上的 spark，
 			// 在本分支要显式列出——它经影子账号 accounts[1] 的映射键进入目录。
-			want: append(openai.DefaultModelIDs(), alias, sparkModel),
+			want: append(append([]string{}, subscriptionDefaults...), alias, sparkModel),
 		},
 		{
 			name:     "unmapped accounts from another platform do not add defaults",
@@ -1410,6 +1417,60 @@ func modelIDsForTest(models []gatewayModelItemForTest) []string {
 		ids = append(ids, model.ID)
 	}
 	return ids
+}
+
+func TestGatewayModels_AntigravityExplicitMappingAppearsInBothCatalogs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const groupID int64 = 93
+	mapping := map[string]any{
+		"gemini-3.8-flash":         "gemini-3.8-flash-high",
+		"gemini-3.8-flash-high":    "gemini-3.8-flash-high",
+		"claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
+		"gemini-pro-agent":         "gemini-pro-agent",
+	}
+	for _, platform := range []string{service.PlatformAntigravity, service.PlatformComposite, service.PlatformGemini} {
+		t.Run(platform, func(t *testing.T) {
+			h := newGatewayModelsHandlerForTest(&gatewayModelsAccountRepoStub{
+				byGroup: map[int64][]service.Account{groupID: {{
+					ID: 25, Platform: service.PlatformAntigravity,
+					Extra:       map[string]any{"mixed_scheduling": true},
+					Credentials: map[string]any{"model_mapping": mapping},
+				}}},
+			})
+			want := []string{"gemini-3.8-flash", "gemini-3.8-flash-high", "gemini-pro-agent", "claude-opus-4-6-thinking"}
+			if platform == service.PlatformGemini {
+				want = want[:3]
+			}
+			for _, codex := range []bool{false, true} {
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+				c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+					Group: &service.Group{ID: groupID, Platform: platform},
+				})
+				var ids []string
+				if codex {
+					h.CodexModels(c)
+					var got codexModelsResponseForTest
+					require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+					for _, model := range got.Models {
+						ids = append(ids, model.Slug)
+					}
+				} else {
+					h.Models(c)
+					var got gatewayModelsResponseForTest
+					require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+					ids = modelIDsForTest(got.Data)
+				}
+				require.Equal(t, http.StatusOK, rec.Code)
+				// 显式条目必须同时出现在两种目录；默认透传补齐的条目不锁定。
+				require.Subset(t, ids, want, "codex=%t", codex)
+				if platform == service.PlatformGemini {
+					require.NotContains(t, ids, "claude-opus-4-6-thinking", "codex=%t", codex)
+				}
+			}
+		})
+	}
 }
 
 // gemini 分组混合调度：组内 antigravity 账号的 gemini-* 映射也应出现在 /v1/models，
